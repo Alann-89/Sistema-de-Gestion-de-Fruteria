@@ -1,9 +1,9 @@
 # 📌 Frutería ICI – Sistema de Punto de Venta (POS)
 
-![Captura del sistema](./asets/Inicio.png)
+![Captura del sistema](./assets/Inicio.png)
 ---
 
-## 📝 Descripción del Proyecto
+## Descripción del Proyecto
 
 **Frutería ICI POS** es un sistema de gestión integral y punto de venta web diseñado para pequeños negocios minoristas, especialmente **fruterías y abarrotes**.
 
@@ -19,9 +19,9 @@ Construido con una **arquitectura modular en React**, está optimizado para func
 
 ---
 
-## ✨ Características Principales
+## Características Principales
 
-### 🛒 Módulo de Ventas (POS)
+### Módulo de Ventas (POS)
 
 - **Terminal de Venta Ágil:** Botones grandes y atajos de teclado (F1, F2, ESC).
 - **Manejo de Pesaje:** Captura simulada de peso para productos a granel (preparado para Web Serial API).
@@ -31,7 +31,7 @@ Construido con una **arquitectura modular en React**, está optimizado para func
 
 ---
 
-### 📦 Inventario y Almacén
+### Inventario y Almacén
 
 - **CRUD Completo:** Altas, bajas y edición de productos con imágenes o emojis.
 - **Semáforo de Stock:** Indicadores visuales cuando el inventario es bajo o crítico.
@@ -40,7 +40,7 @@ Construido con una **arquitectura modular en React**, está optimizado para func
 
 ---
 
-### 🧾 Proveedores y Compras
+### Proveedores y Compras
 
 - **Directorio de Proveedores:** Teléfono, dirección, notas y días de visita.
 - **Cuentas por Pagar:** Registro de deuda acumulada y abonos.
@@ -48,7 +48,7 @@ Construido con una **arquitectura modular en React**, está optimizado para func
 
 ---
 
-### 📊 Reportes y Finanzas
+### Reportes y Finanzas
 
 - **Dashboard Financiero:** Ventas totales, utilidad bruta y flujo de efectivo.
 - **Corte de Caja:** Apertura, arqueo y cierre de turno.
@@ -57,14 +57,14 @@ Construido con una **arquitectura modular en React**, está optimizado para func
 
 ---
 
-### 🔐 Administración y Seguridad
+### Administración y Seguridad
 
 - **Roles de Usuario:** Administrador, Vendedor y Dueño.
 - **Respaldo de Datos:** Exportación e importación de la base completa en JSON.
 
 ---
 
-## 🧪 Tecnologías Utilizadas
+## Tecnologías Utilizadas
 
 - **Frontend:** React.js (Hooks + Context API)  
 - **Compilación:** Vite  
@@ -74,58 +74,64 @@ Construido con una **arquitectura modular en React**, está optimizado para func
 
 ---
 
-## 📁 Estructura del Proyecto
+## Estructura del Proyecto
 
 src/
-├── components/ # Componentes UI reutilizables (Botones, Inputs, Cards, Modales)
+├── components/      # Componentes UI reutilizables (Botones, Inputs, Cards, Modales)
 ├── modules/
-│ ├── admin/ # Gestión de usuarios y configuración
-│ ├── auth/ # Pantallas de login y autenticación
-│ ├── inventory/ # Productos, precios, stock, mermas
-│ ├── pos/ # Terminal de venta, carrito, checkout
-│ ├── reports/ # Reportes, gráficas y cortes de caja
-│ └── suppliers/ # Proveedores, compras y cuentas por pagar
-├── data/ # Mock data inicial para pruebas
-└── utils/ # Helpers, formateadores, validaciones
-
-
+│   ├── admin/       # Gestión de usuarios y configuración
+│   ├── auth/        # Pantallas de login y autenticación
+│   ├── inventory/   # Productos, precios, stock, mermas
+│   ├── pos/         # Terminal de venta, carrito, checkout
+│   ├── reports/     # Reportes, gráficas y cortes de caja
+│   └── suppliers/   # Proveedores, compras y cuentas por pagar
+├── data/            # Mock data inicial para pruebas
+└── utils/           # Helpers, formateadores, validaciones
 
 ---
 
-## ⚙️ Instalación y Despliegue
+## Instalación y Despliegue
 
-### 📌 Prerrequisitos
+### Prerrequisitos
 
 - Node.js **16 o superior**
 - npm o yarn
 
 ---
 
-### 🚀 Pasos de Instalación
+### Pasos de Instalación
 
 #### 1. Clonar el repositorio
 
 ```bash
 git clone https://github.com/Alann-89 Sistema-de-Gestion-de-Fruteria
 cd Sistema-de-Gestion-de-Fruteria
-2. Instalar dependencias
-bash
-Copiar código
+```
+
+#### 2. Instalar las dependencias
+```bash
 npm install
 # o
 yarn install
-3. Ejecutar entorno de desarrollo
+```
 
-
+#### 3. Ejecutar entorno de desarrollo
+```bash
 npm run dev
 # o
 yarn dev
-4. Abrir en el navegador
+```
 
+#### 4. Abrir en el navegador
 http://localhost:5173
-👥 Usuarios por Defecto (Demo)
-Rol	Usuario / PIN	Contraseña	Acceso
-Administrador	1234	N/A	Total
-Vendedor	0000	N/A	Solo POS
+
+---
+
+### Usuarios por Defecto (Demo)
+| Rol           | Usuario / PIN | Contraseña | Acceso    |
+|---------------|----------------|------------|-----------|
+| Administrador | 1234           | N/A        | Total     |
+| Vendedor      | 0000           | N/A        | Solo POS  |
+
 
 Puedes añadir usuarios y credenciales desde el módulo de administración.

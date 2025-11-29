@@ -1,6 +1,6 @@
-# 📌 Frutería ICI – Sistema de Punto de Venta (POS)
+# Frutería ICI – Sistema de Punto de Venta (POS)
 
-![Captura del sistema](./assets/Inicio.png)
+![Captura del sistema](./assets/inicio.png)
 ---
 
 ## Descripción del Proyecto
@@ -76,17 +76,7 @@ Construido con una **arquitectura modular en React**, está optimizado para func
 
 ## Estructura del Proyecto
 
-src/
-├── components/      # Componentes UI reutilizables (Botones, Inputs, Cards, Modales)
-├── modules/
-│   ├── admin/       # Gestión de usuarios y configuración
-│   ├── auth/        # Pantallas de login y autenticación
-│   ├── inventory/   # Productos, precios, stock, mermas
-│   ├── pos/         # Terminal de venta, carrito, checkout
-│   ├── reports/     # Reportes, gráficas y cortes de caja
-│   └── suppliers/   # Proveedores, compras y cuentas por pagar
-├── data/            # Mock data inicial para pruebas
-└── utils/           # Helpers, formateadores, validaciones
+![Captura de la estructura](./assets/estructura.png)
 
 ---
 

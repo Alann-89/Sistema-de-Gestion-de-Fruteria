@@ -1,6 +1,6 @@
 # Frutería ICI – Sistema de Punto de Venta (POS)
 
-![Captura del sistema](./assets/inicio.png)
+![Captura del sistema](./assets/Inicio.png)
 ---
 
 ## Descripción del Proyecto

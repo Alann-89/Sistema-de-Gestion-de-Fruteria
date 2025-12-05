@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Wifi, WifiOff } from 'lucide-react';
 import { Button, Card } from '../../components/ui/SharedComponents';
+import { supabase } from '../../supabase/supabaseClient';
+
 
 const LoginScreen = ({ onLogin, users }) => {
   const [method, setMethod] = useState('pin'); 
@@ -9,18 +11,53 @@ const LoginScreen = ({ onLogin, users }) => {
   const [error, setError] = useState('');
   const [isOnline, setIsOnline] = useState(true);
 
-  const handleLogin = (e) => {
-    e.preventDefault();
-    const cleanInput = inputVal.trim();
-    let user = null;
+  const handleLogin = async (e) => {
+  e.preventDefault();
+  setError('');
+  console.log("Método seleccionado:", method);
+  console.log("Valor ingresado:", inputVal);
+  console.log("Password ingresado:", passwordVal);
+  try {
+    let query;
+
     if (method === 'pin') {
-      user = users.find(u => u.pin === cleanInput);
+      // Login por PIN
+      query = supabase
+        .from("users")
+        .select("*")
+        .eq("pin", inputVal.trim())
+        .eq("active", true)
+        .single();
     } else {
-      user = users.find(u => u.name.toLowerCase() === cleanInput.toLowerCase() && u.password === passwordVal);
+      // Login por usuario + contraseña
+      query = supabase
+        .from("users")
+        .select("*")
+        .eq("name", inputVal.trim())
+        .eq("password", passwordVal)
+        .eq("active", true)
+        .single();
     }
-    if (user && user.active) onLogin(user);
-    else setError('Credenciales inválidas o usuario inactivo');
-  };
+
+        console.log("Ejecutando query...");
+    const { data, error: supaError } = await query;
+
+        console.log("Resultado Supabase:", { data, supaError });
+
+    if (supaError || !data) {
+      setError("Credenciales inválidas o usuario inactivo");
+      return;
+    }
+
+    // Login exitoso → regresamos el usuario completo (row)
+    onLogin(data);
+
+  } catch (err) {
+    console.error(err);
+    setError("Error de conexión con la nube");
+  }
+};
+
 
   return (
     <div className="min-h-screen bg-[#FAFAFA] flex items-center justify-center p-4 relative">

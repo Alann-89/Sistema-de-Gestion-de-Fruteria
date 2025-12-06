@@ -32,13 +32,13 @@ const SalesHistory = ({ sales, users, onCancelSale, currentUser }) => {
         if (!sale) return;
         setIsDetailLoading(true);
         setSelectedSale(sale);
-        
+
         try {
             const { data: items, error } = await supabase
                 .from('sale_items')
                 .select(`
-                    quantity, 
-                    subtotal, 
+                    quantity,
+                    subtotal,
                     price,
                     products (name, unit)
                 `)
@@ -53,7 +53,7 @@ const SalesHistory = ({ sales, users, onCancelSale, currentUser }) => {
                 price: item.price,
                 total: item.subtotal,
             }));
-            
+
             setSaleItemsDetail(structuredItems);
 
         } catch (error) {
@@ -127,7 +127,7 @@ const SalesHistory = ({ sales, users, onCancelSale, currentUser }) => {
     );
 };
 
-// --- SUB-COMPONENTE: MODAL DE COBRO (Sin cambios relevantes) ---
+// --- SUB-COMPONENTE: MODAL DE COBRO ---
 const CheckoutModal = ({ isOpen, onClose, total, onConfirm }) => {
     const [received, setReceived] = useState('');
     const [method, setMethod] = useState('Efectivo');
@@ -168,9 +168,9 @@ const CheckoutModal = ({ isOpen, onClose, total, onConfirm }) => {
 };
 
 // ----------------------------------------------------------------------
-// --- COMPONENTE PRINCIPAL POS (Ajustes de Folio y Lógica de Venta) ---
+// --- COMPONENTE PRINCIPAL POS (Con todas las correcciones de Folio, FK y Sincronización) ---
 // ----------------------------------------------------------------------
-const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, setHeldSales, setProducts }) => {
+const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, setHeldSales, setProducts, refetchProducts }) => {
     const [view, setView] = useState('terminal'); 
     const [cart, setCart] = useState([]);
     const [weight, setWeight] = useState(0.000);
@@ -178,41 +178,33 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
     const [selectedSeller, setSelectedSeller] = useState(currentUser.id);
     const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
     
-    // ESTADOS: nextFolio a null para forzar la carga
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
     const [nextFolio, setNextFolio] = useState(null); 
     
     const captureWeight = () => { setWeight(parseFloat((Math.random() * 2 + 0.1).toFixed(3))); };
 
-    // ----------------------------------------------------
     // LÓGICA DE FOLIO (VERSIÓN 100% SEGURA CON MAX)
-    // ----------------------------------------------------
     const fetchLastFolio = useCallback(async () => {
-        // No limpiamos el error aquí para que el usuario vea el problema.
-        
-        // La consulta busca el folio MÁS GRANDE y que NO SEA NULL
         const { data, error } = await supabase
             .from('sales')
             .select('folio')
-            .not('folio', 'is', null) // <-- FILTRO CLAVE: Ignora los NULLS de ventas viejas
+            .not('folio', 'is', null) 
             .order('folio', { ascending: false })
             .limit(1);
 
         if (error) {
             console.error("Error al obtener el último folio:", error);
             setError("⚠️ Error al conectar con la base de datos para obtener el folio. Se usará el último conocido.");
-            setNextFolio(INITIAL_FOLIO); // Fallback si la DB está inaccesible
+            setNextFolio(INITIAL_FOLIO);
             return; 
         }
 
         if (data && data.length > 0 && data[0].folio) {
             const lastFolio = data[0].folio;
-            // Corregimos el folio local si es menor al valor de la DB
             setNextFolio(Math.max(lastFolio + 1, nextFolio || INITIAL_FOLIO)); 
-            setError(null); // Si la carga fue exitosa, limpiamos el error
+            setError(null);
         } else {
-            // Si no hay folios no nulos, iniciamos con 1000
             setNextFolio(INITIAL_FOLIO);
             setError(null);
         }
@@ -222,17 +214,14 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
         fetchLastFolio();
     }, [fetchLastFolio]); 
 
-    // --- FUNCIONES DE LÓGICA DE NEGOCIO (VENTAS) ---
-
     // Función para GUARDAR la venta en Supabase y DESCONTAR stock
     const handleSaveSale = async (paymentData) => {
-        // Bloqueo si el folio es null (aún no se carga), carrito vacío, o hay error
         if (cart.length === 0 || isLoading || error || nextFolio === null) return; 
 
         setIsLoading(true);
         setError(null);
+        let newSaleId = null; // CLAVE: Definimos aquí para usar en el catch
 
-        // 1. Objeto para la cabecera de la Venta (Tabla 'sales')
         const newSaleHeader = {
             date: new Date().toISOString(),
             user_id: selectedSeller, 
@@ -241,7 +230,7 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
             received: paymentData.received,
             change: paymentData.change,
             status: 'completed',
-            folio: nextFolio, // <-- USAMOS EL FOLIO SEGURO
+            folio: nextFolio,
         };
 
         try {
@@ -261,12 +250,27 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
                 .single();
             
             if (saleError) throw saleError;
-            const newSaleId = saleData.id;
+            newSaleId = saleData.id; // OBTENEMOS EL ID AQUI
             
             // 2. Preparar e insertar los items en 'sale_items'
-            const itemsForInsert = cart.map(item => ({
+            
+            // FILTRO CRUCIAL (solución a error 23503 si el estado local estuviera actualizado)
+            const validCartItems = cart.filter(item => {
+                const exists = products.some(p => p.id === item.id);
+                if (!exists) {
+                    console.error(`ERROR 23503 (FK): Producto ID ${item.id} (${item.name}) no encontrado localmente. Se omitirá en esta venta.`);
+                }
+                return exists;
+            });
+
+            if (validCartItems.length === 0) {
+                throw new Error("El carrito no contiene productos válidos para guardar. Venta cancelada.");
+            }
+
+
+            const itemsForInsert = validCartItems.map(item => ({
                 sale_id: newSaleId,
-                product_id: item.id, 
+                product_id: item.id,
                 quantity: item.qty,
                 price: item.price, 
                 subtotal: item.total,
@@ -279,16 +283,11 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
             if (itemsError) throw itemsError;
 
             // 3. Actualizar el stock de los productos
-            const stockUpdates = cart.map(item => {
+            const stockUpdates = validCartItems.map(item => {
                 const currentProduct = products.find(p => p.id === item.id);
                 if (!currentProduct) return null;
-                
                 const newStock = currentProduct.stock - item.qty;
-                
-                return {
-                    id: item.id,
-                    stock: newStock,
-                };
+                return { id: item.id, stock: newStock };
             }).filter(Boolean);
 
             const { data: updatedProducts, error: stockError } = await supabase
@@ -305,7 +304,6 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
                 return updated ? { ...p, stock: updated.stock } : p;
             }));
 
-            // Aumentar el folio DESPUÉS de una inserción exitosa
             setNextFolio(newSaleHeader.folio + 1); 
 
             setCart([]);
@@ -315,19 +313,34 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
         } catch (err) {
             console.error('Error al guardar la venta:', err);
             
-            // TRATAMIENTO ESPECÍFICO DEL ERROR DE FOLIO DUPLICADO
-            if (err.code === "23505") {
+            // 🚨 REVERTIR TRANSACCIÓN SI FALLÓ DESPUÉS DE LA INSERCIÓN INICIAL
+            if (newSaleId) {
+                console.warn(`Intentando eliminar venta incompleta con ID: ${newSaleId} de la tabla 'sales'.`);
+                await supabase.from('sales').delete().eq('id', newSaleId);
+                setSales(prevSales => prevSales.filter(s => s.id !== newSaleId));
+            }
+            
+            // TRATAMIENTO ESPECÍFICO DEL ERROR DE CLAVE FORÁNEA (23503)
+            if (err.code === "23503") {
+                 setError(`🚨 Producto eliminado: El carrito contiene un producto obsoleto. El sistema está resincronizando la lista de productos.`);
+                 alert("Error: El carrito contenía productos eliminados. Se ha limpiado el carrito y se está resincronizando la lista de productos para evitar este fallo.");
+                 setCart([]); // Limpiamos el carrito (obligatorio)
+                 
+                 // === SOLUCIÓN CLAVE DE SINCRONIZACIÓN ===
+                 if (typeof refetchProducts === 'function') {
+                    await refetchProducts(); // <--- LLAMADA PARA RESINCRONIZAR
+                 } 
+                 // =======================================
+            }
+            // TRATAMIENTO ESPECÍFICO DEL ERROR DE FOLIO DUPLICADO (23505)
+            else if (err.code === "23505") {
                 setError(`🚨 ¡Conflicto de Folio! El folio ${nextFolio} ya existe. Recalculando...`);
-                alert("Conflicto de Folio detectado. Presione 'Aceptar', espere a que se recalcule el folio y vuelva a intentar el cobro.");
-                
-                // Bloqueamos el botón y forzamos el recálculo
+                alert("Conflicto de Folio detectado. Por favor, vuelva a intentar el cobro.");
                 setNextFolio(null);
                 await fetchLastFolio(); 
-                
-                // Limpiamos el error si el recálculo fue exitoso
                 setError(null); 
-                
-            } else {
+            } 
+            else {
                  setError(`Error al procesar la venta: ${err.message}. Revise la consola.`);
                  alert("Fallo crítico al guardar la venta. Revise la consola.");
             }
@@ -336,7 +349,7 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
         }
     };
     
-    // Función para CANCELAR la venta y DEVOLVER stock (Sin cambios relevantes)
+    // Función para CANCELAR la venta y DEVOLVER stock
     const handleCancelSale = async (saleId) => {
         if (!window.confirm("¿Está seguro de CANCELAR esta venta? Esta acción no se puede deshacer y devolverá el stock al inventario.")) {
             return;
@@ -352,7 +365,7 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
         }
         
         try {
-            // 1. Obtener los productos de la venta cancelada desde la tabla de detalles
+            // 1. Obtener los productos de la venta cancelada
             const { data: saleItems, error: itemsFetchError } = await supabase
                 .from('sale_items')
                 .select('product_id, quantity')
@@ -362,7 +375,7 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
                  throw new Error("No se encontraron detalles de la venta en 'sale_items'. No se puede devolver stock.");
             }
             
-            // 2. Marcar la venta como 'cancelled' en la tabla 'sales'
+            // 2. Marcar la venta como 'cancelled'
             const { error: cancelError } = await supabase
                 .from('sales')
                 .update({ status: 'cancelled' })
@@ -374,13 +387,8 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
             const stockReturns = saleItems.map(item => {
                 const currentProduct = products.find(p => p.id === item.product_id);
                 if (!currentProduct) return null;
-                
                 const newStock = currentProduct.stock + item.quantity;
-                
-                return {
-                    id: item.product_id,
-                    stock: newStock,
-                };
+                return { id: item.product_id, stock: newStock };
             }).filter(Boolean);
 
             const { data: returnedProducts, error: stockError } = await supabase
@@ -392,7 +400,6 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
             
             // 4. Actualizar estado local
             setSales(sales.map(s => s.id === saleId ? { ...s, status: 'cancelled' } : s));
-
             setProducts(products.map(p => {
                 const updated = returnedProducts.find(up => up.id === p.id);
                 return updated ? { ...p, stock: updated.stock } : p;
@@ -421,7 +428,6 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
         return () => window.removeEventListener('keydown', handleKeyPress);
     }, [view, cart, isLoading, error, nextFolio]); 
 
-    // Función para añadir productos al carrito (con chequeo de stock)
     const addToCart = (product) => {
         const currentProductInStock = products.find(p => p.id === product.id);
         if (!currentProductInStock) { return; } 
@@ -429,7 +435,6 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
         let qtyToAdd = 1;
         let total = product.price;
         let requestedQty;
-
         const existingItem = cart.find(item => item.id === product.id);
 
         if (product.unit === 'kg') {
@@ -462,10 +467,8 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
         if (existingItem) {
             const newCart = [...cart];
             const existingItemIndex = newCart.findIndex(item => item.id === product.id);
-            
             newCart[existingItemIndex].qty += qtyToAdd;
             newCart[existingItemIndex].total = newCart[existingItemIndex].qty * newCart[existingItemIndex].price;
-            
             setCart(newCart);
         } else {
             setCart([...cart, itemToAdd]);
@@ -577,7 +580,6 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
                                 variant="accent" 
                                 className="w-full py-4 text-lg shadow-md hover:shadow-lg transform active:scale-[0.98]" 
                                 icon={DollarSign} 
-                                // BLOQUEO CLAVE: nextFolio debe ser diferente de null y no debe haber error.
                                 disabled={cart.length === 0 || isLoading || error || nextFolio === null} 
                                 onClick={() => setIsCheckoutOpen(true)} 
                                 title="F2">

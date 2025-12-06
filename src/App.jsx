@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ShoppingCart, Package, Users, UserCheck, TrendingUp, Settings, LogOut } from 'lucide-react';
 
 import { INITIAL_DATA } from './data/initialData';
 import { getCurrentDate } from './utils/helpers';
+import { supabase } from './supabase/supabaseClient';
 
 import LoginScreen from './modules/auth/LoginScreen';
 import POSModule from './modules/pos/POSModule';
@@ -33,6 +34,43 @@ const App = () => {
   const [cashFunds, setCashFunds] = useState(INITIAL_DATA.cashFunds);
   const [priceHistory, setPriceHistory] = useState(INITIAL_DATA.priceHistory);
 
+  const refetchProducts = async () => {
+    try {
+      const { data: productsData, error } = await supabase
+        .from('products')
+        .select('*');
+      if (error) throw error;
+      setProducts(productsData);
+    } catch (err) {
+      console.error('Error refetching products:', err);
+    }
+  };
+
+  const refetchCashFunds = async () => {
+    try {
+      const { data: cashFundsData, error } = await supabase
+        .from('cash_funds')
+        .select('*')
+        .order('opened_at', { ascending: false });
+      if (error) throw error;
+      setCashFunds(cashFundsData.map(fund => ({
+        id: fund.id,
+        openedAt: fund.opened_at,
+        amount: fund.amount,
+        closedAt: fund.closed_at,
+        finalCounted: fund.final_counted,
+        theoreticalCash: fund.theoretical_cash,
+        difference: fund.difference
+      })));
+    } catch (err) {
+      console.error('Error refetching cash funds:', err);
+    }
+  };
+
+  useEffect(() => {
+    refetchProducts();
+    refetchCashFunds();
+  }, []);
 
   const handleBackup = () => {
     const data = { users, products, suppliers, sales, purchases, payments, wasteLogs, cashFunds, priceHistory };
@@ -87,16 +125,17 @@ const App = () => {
           <div className="flex items-center gap-4"><div className="text-right hidden sm:block"><div className="font-bold text-sm">{currentUser.name}</div><div className="text-xs text-green-600 font-medium uppercase">{currentUser.role}</div></div><div className="w-10 h-10 rounded-full bg-[#0F4C3A] text-white flex items-center justify-center font-bold">{currentUser.name.charAt(0)}</div></div>
         </header>
         <div className="flex-1 overflow-auto p-4 md:p-6 bg-[#FAFAFA]">
-          {currentView === 'pos' && 
-                <POSModule 
-                    products={products} 
-                    users={users} 
-                    currentUser={currentUser} 
-                    sales={sales} 
-                    setSales={setSales} 
-                    heldSales={heldSales} 
-                    setHeldSales={setHeldSales} 
-                    setProducts={setProducts} 
+          {currentView === 'pos' &&
+                <POSModule
+                    products={products}
+                    users={users}
+                    currentUser={currentUser}
+                    sales={sales}
+                    setSales={setSales}
+                    heldSales={heldSales}
+                    setHeldSales={setHeldSales}
+                    setProducts={setProducts}
+                    refetchProducts={refetchProducts}
                 />
             }
           {currentView === 'inventory' && <InventoryModule products={products} setProducts={setProducts} wasteLogs={wasteLogs} setWasteLogs={setWasteLogs} suppliers={suppliers} setSuppliers={setSuppliers} setPurchases={setPurchases} currentUser={currentUser} priceHistory={priceHistory} setPriceHistory={setPriceHistory} />}

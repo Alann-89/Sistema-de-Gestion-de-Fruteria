@@ -1,613 +1,433 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Calculator, History, Search, Scale, PauseCircle, ShoppingCart, Trash2, DollarSign, Users, FileText, Printer, X } from 'lucide-react';
-import { supabase } from '../../supabase/supabaseClient'; 
+import React, { useState, useMemo } from 'react';
+import { FileSpreadsheet } from 'lucide-react';
 import { Button, Card, Modal } from '../../components/ui/SharedComponents';
-import { formatCurrency, formatTime, getCurrentDate } from '../../utils/helpers';
+import { formatCurrency, formatTime, formatDateShort, downloadCSV } from '../../utils/helpers';
 
-// Define el folio de inicio en caso de que la tabla 'sales' esté completamente vacía
-const INITIAL_FOLIO = 1000; 
+// Componente auxiliar para la gráfica de barras
+const SimpleBarChart = ({ data }) => {
+    const maxVal = Math.max(...data.map(d => d.value), 100);
+    return (
+        <div className="flex items-end gap-2 h-40 pt-4 pb-2 border-b border-gray-200">
+            {data.map((item, idx) => {
+                const height = (item.value / maxVal) * 100;
+                return (
+                    <div key={idx} className="flex-1 flex flex-col items-center gap-1 group">
+                        <div className="w-full bg-gray-100 rounded-t-md relative h-full flex items-end overflow-hidden hover:bg-gray-200">
+                           <div className="w-full bg-[#0F4C3A] transition-all duration-500" style={{ height: `${height}%` }}></div>
+                        </div>
+                        <span className="text-[10px] text-gray-500 font-bold mt-1 truncate w-full text-center">{item.label}</span>
+                        {/* Tooltip con el monto exacto (si no es 0) */}
+                        {item.value > 0 && (
+                            <div className="text-[10px] text-gray-400 opacity-0 group-hover:opacity-100 absolute -mt-6 bg-black text-white px-1 rounded pointer-events-none">${item.value.toFixed(0)}</div>
+                        )}
+                    </div>
+                )
+            })}
+        </div>
+    )
+};
 
-// --- SUB-COMPONENTE: HISTORIAL DE VENTAS ---
-const SalesHistory = ({ sales, users, onCancelSale, currentUser }) => {
-    const [selectedSale, setSelectedSale] = useState(null);
-    const [saleItemsDetail, setSaleItemsDetail] = useState([]);
-    const [filterDateStart, setFilterDateStart] = useState('');
-    const [filterDateEnd, setFilterDateEnd] = useState('');
-    const [filterSeller, setFilterSeller] = useState('all');
-    const [filterMethod, setFilterMethod] = useState('all');
-    const [isDetailLoading, setIsDetailLoading] = useState(false);
-
-    const filteredSales = sales.filter(sale => {
-        const saleDate = new Date(sale.date);
-        const start = filterDateStart ? new Date(filterDateStart) : null;
-        const end = filterDateEnd ? new Date(filterDateEnd) : null;
-        if (end) end.setHours(23, 59, 59, 999);
-        const matchesDate = (!start || saleDate >= start) && (!end || saleDate <= end);
-        const matchesSeller = filterSeller === 'all' || sale.user_id === Number(filterSeller); 
-        const matchesMethod = filterMethod === 'all' || sale.method === filterMethod;
-        return matchesDate && matchesSeller && matchesMethod && sale.status !== 'cancelled';
-    });
+const ReportsModule = ({ sales, wasteLogs, cashFunds, setCashFunds, payments }) => {
+    const [openingAmount, setOpeningAmount] = useState('');
+    const [isCashModalOpen, setIsCashModalOpen] = useState(false);
     
-    const fetchSaleDetails = useCallback(async (sale) => {
-        if (!sale) return;
-        setIsDetailLoading(true);
-        setSelectedSale(sale);
-        
-        try {
-            const { data: items, error } = await supabase
-                .from('sale_items')
-                .select(`
-                    quantity, 
-                    subtotal, 
-                    price,
-                    products (name, unit)
-                `)
-                .eq('sale_id', sale.id);
+    const [closingAmount, setClosingAmount] = useState('');
+    const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
+    
+    const [timeRange, setTimeRange] = useState('today'); 
+    const [customStart, setCustomStart] = useState('');
+    const [customEnd, setCustomEnd] = useState('');
 
-            if (error) throw error;
+    // ------------------------------------------
+    // LÓGICA DE FILTRADO DE DATOS
+    // ------------------------------------------
+    const filteredData = useMemo(() => {
+        const now = new Date();
+        let start = new Date();
+        let end = new Date();
 
-            const structuredItems = items.map(item => ({
-                name: item.products.name,
-                unit: item.products.unit,
-                qty: item.quantity,
-                price: item.price,
-                total: item.subtotal,
-            }));
-            
-            setSaleItemsDetail(structuredItems);
-
-        } catch (error) {
-            console.error('Error fetching sale details:', error);
-            setSaleItemsDetail([{ name: 'Error al cargar detalles', total: 0, qty: 0 }]);
-        } finally {
-            setIsDetailLoading(false);
+        if (timeRange === 'today') {
+            start.setHours(0,0,0,0);
+            end.setHours(23,59,59,999);
+        } else if (timeRange === 'week') {
+            const day = now.getDay(); // 0 (Domingo) - 6 (Sábado)
+            // Calcula el inicio de la semana (Lunes). Lunes es el día 1, Domingo es el día 0.
+            const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Ajuste para que Lunes (1) sea el inicio
+            start = new Date(now.setDate(diff));
+            start.setHours(0,0,0,0);
+            end = new Date(start);
+            end.setDate(start.getDate() + 6); // Lunes + 6 días = Domingo
+            end.setHours(23,59,59,999);
+        } else if (timeRange === 'month') {
+            start = new Date(now.getFullYear(), now.getMonth(), 1);
+            end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        } else if (timeRange === 'custom') {
+            start = customStart ? new Date(customStart) : new Date(0);
+            end = customEnd ? new Date(customEnd) : new Date();
+            end.setHours(23, 59, 59, 999);
         }
-    }, []);
 
-    const handleCloseModal = () => {
-        setSelectedSale(null);
-        setSaleItemsDetail([]);
+        const _sales = sales.filter(s => { const d = new Date(s.date); return d >= start && d <= end; });
+        const _payments = payments.filter(p => { const d = new Date(p.date); return d >= start && d <= end; });
+        
+        // El filtro de cashFunds debe incluir si la caja fue abierta O cerrada dentro del rango.
+        const _funds = cashFunds.filter(f => { 
+            const opened = new Date(f.openedAt);
+            const closed = f.closedAt ? new Date(f.closedAt) : end; // Usamos 'end' si está abierta
+
+            // El turno se cuenta si: 1) Se abrió en el rango O 2) Se cerró en el rango (y se abrió antes)
+            return (opened >= start && opened <= end) || (f.closedAt && closed >= start && closed <= end);
+        });
+        
+        const _waste = wasteLogs.filter(w => { const d = new Date(w.date); return d >= start && d <= end; });
+
+        // Movimientos para la tabla de detalle (ordenados por fecha descendente)
+        const allMovements = [
+            // Ventas totales (incluye digital y efectivo)
+            ..._sales.map(s => ({ ...s, type: 'Venta', amount: s.total, isPositive: true, dateObj: new Date(s.date), method: s.method, folio: s.folio })),
+            // Pagos a proveedores (salidas)
+            ..._payments.map(p => ({ ...p, type: 'Pago Proveedor', amount: p.amount, isPositive: false, dateObj: new Date(p.date), method: p.method, supplierId: p.supplierId })),
+            // Aperturas de caja
+            ..._funds.map(f => ({ ...f, type: 'Apertura Caja', amount: f.amount, isPositive: true, dateObj: new Date(f.openedAt), method: 'Efectivo', folio: null }))
+        ].sort((a,b) => b.dateObj - a.dateObj);
+
+        return { sales: _sales, payments: _payments, funds: _funds, waste: _waste, allMovements, start, end };
+    }, [sales, wasteLogs, cashFunds, payments, timeRange, customStart, customEnd]);
+
+    // ------------------------------------------
+    // CÁLCULOS PRINCIPALES
+    // ------------------------------------------
+    const totalSales = filteredData.sales.reduce((sum, s) => sum + s.total, 0);
+    const totalCashSales = filteredData.sales.filter(s => s.method === 'Efectivo').reduce((sum, s) => sum + s.total, 0);
+    const totalDigital = totalSales - totalCashSales;
+    
+    // Asumiendo que wasteLogs tienen el campo costLost (Costo perdido)
+    const totalWaste = filteredData.waste.reduce((sum, w) => sum + (w.costLost || 0), 0);
+    
+    // Costo de la Mercancía Vendida (CMV)
+    const totalCostSold = filteredData.sales.reduce((acc, sale) => {
+        // Asumiendo que sale.items tiene costAtSale y qty
+        return acc + (sale.items ? sale.items.reduce((sItem, item) => sItem + (item.costAtSale * item.qty), 0) : 0);
+    }, 0);
+    const grossProfit = totalSales - totalCostSold - totalWaste;
+
+    const totalFunds = filteredData.funds.reduce((sum, f) => sum + f.amount, 0);
+    const totalCashPayments = filteredData.payments.filter(p => p.method === 'Efectivo').reduce((sum, p) => sum + p.amount, 0);
+    
+    // Dinero Teórico = Fondos Iniciales + Ventas Efectivo - Pagos Efectivo
+    const theoreticalCash = totalFunds + totalCashSales - totalCashPayments;
+
+    // Estado de la caja para el turno actual (solo si el rango es 'today')
+    // Nota: currentFund debe ser el ÚLTIMO turno, no el último del filtro.
+    const currentFund = cashFunds.length > 0 ? cashFunds[cashFunds.length - 1] : null;
+    const isShiftOpen = timeRange === 'today' && currentFund && !currentFund.closedAt;
+
+    // ------------------------------------------
+    // MANEJO DE CAJA (APERTURA Y CIERRE)
+    // ------------------------------------------
+    const handleOpenShift = (e) => {
+        e.preventDefault();
+        const amount = parseFloat(openingAmount);
+        if (isNaN(amount) || amount < 0) {
+            alert("Por favor, ingrese un monto inicial válido.");
+            return;
+        }
+        
+        // ************************************************
+        // CORRECCIÓN APLICADA AQUÍ: 
+        // Se asegura que la fecha se guarde como un STRING (ISO), 
+        // lo que es consistente con cómo Supabase/DB lo devuelve
+        // y con cómo se usa en 'new Date(f.openedAt)' en el useMemo.
+        const newOpenedAt = new Date().toISOString(); 
+        // ************************************************
+
+        setCashFunds([...cashFunds, {
+            id: Date.now(),
+            openedAt: newOpenedAt, 
+            amount: amount,
+            closedAt: null,
+            finalCounted: null,
+            theoreticalCash: null,
+            difference: null
+        }]);
+        setOpeningAmount('');
+        setIsCashModalOpen(false);
+        alert("✅ Caja abierta exitosamente.");
     };
 
+    const handleCloseShift = () => {
+        // Abre el modal para que el usuario ingrese el monto contado
+        setClosingAmount(theoreticalCash.toFixed(2)); // Sugiere el monto teórico
+        setIsCloseModalOpen(true);
+    };
+
+    const handleFinalClose = (e) => {
+        e.preventDefault();
+        const finalCounted = parseFloat(closingAmount);
+
+        if (isNaN(finalCounted)) {
+            alert("Por favor, ingrese un monto válido.");
+            return;
+        }
+
+        if(window.confirm("¿Confirmar el corte de caja con el monto contado?")) {
+            const updated = [...cashFunds];
+            const current = updated[updated.length - 1];
+
+            // 1. Calcular Sobrante/Faltante
+            const difference = finalCounted - theoreticalCash;
+
+            // 2. Actualizar el fondo actual
+            current.closedAt = new Date().toISOString(); // Guardar como string
+            current.finalCounted = finalCounted;
+            current.theoreticalCash = theoreticalCash;
+            current.difference = difference;
+
+            setCashFunds(updated);
+            setClosingAmount('');
+            setIsCloseModalOpen(false);
+            alert(`✅ Corte de Caja completado. Diferencia: ${formatCurrency(difference)}`);
+        }
+    };
+    
+    // ------------------------------------------
+    // EXPORTACIÓN DE DATOS
+    // ------------------------------------------
+    const exportExcel = () => {
+        downloadCSV(filteredData.allMovements.map(m => ({
+            Fecha: m.dateObj.toLocaleDateString(),
+            Hora: m.dateObj.toLocaleTimeString(),
+            Tipo: m.type,
+            // Detalle más preciso
+            Descripcion: m.folio ? `Ticket #${m.folio}` : (m.supplierId ? `Pago a Proveedor ID ${m.supplierId}` : (m.type === 'Apertura Caja' ? 'Fondo de Caja' : 'Movimiento de Caja')), 
+            Metodo: m.method || 'Efectivo',
+            Monto: m.isPositive ? `${m.amount}` : `-${m.amount}`
+        })), `ReporteMovimientos_${timeRange}.csv`);
+    };
+
+    // ------------------------------------------
+    // DATOS PARA GRÁFICOS
+    // ------------------------------------------
+    const chartData = useMemo(() => {
+        if (timeRange === 'today') {
+            const hours = Array(14).fill(0).map((_, i) => ({ label: `${i+8}h`, value: 0 })); 
+            filteredData.sales.forEach(s => {
+                const h = new Date(s.date).getHours();
+                // Asumiendo horario de 8h a 21h (14 horas)
+                if (h >= 8 && h <= 21) hours[h-8].value += s.total;
+            });
+            return hours;
+        } else {
+            const daysMap = {};
+            filteredData.sales.forEach(s => {
+                const key = formatDateShort(s.date);
+                if(!daysMap[key]) daysMap[key] = 0;
+                daysMap[key] += s.total;
+            });
+            // Mostrar todos los días dentro del rango (limitado por el SimpleBarChart si es necesario)
+            return Object.entries(daysMap).map(([k, v]) => ({ label: k, value: v })); 
+        }
+    }, [filteredData, timeRange]);
+    
+    const productStats = {};
+    filteredData.sales.forEach(sale => { 
+        sale.items.forEach(item => { 
+            if (!productStats[item.name]) productStats[item.name] = 0; 
+            productStats[item.name] += item.qty; 
+        }); 
+    });
+    const topProducts = Object.entries(productStats).sort(([, a], [, b]) => b - a).slice(0, 5); 
+
+    const wasteStats = {};
+    // Usamos 'costLost' para calcular la pérdida económica
+    filteredData.waste.forEach(log => { 
+        if (!wasteStats[log.productName]) wasteStats[log.productName] = 0; 
+        wasteStats[log.productName] += log.costLost; 
+    });
+    const topWasteProducts = Object.entries(wasteStats).sort(([, a], [, b]) => b - a).slice(0, 5);
+
+    // ------------------------------------------
+    // RENDERIZADO (JSX)
+    // ------------------------------------------
     return (
-        <div className="h-full flex flex-col gap-4">
-            <div className="bg-white p-3 rounded-lg border-gray-300 border flex flex-wrap gap-4 items-end">
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">Fecha Inicio</label><input type="date" className="p-2 border rounded border-gray-300 text-sm" value={filterDateStart} onChange={e => setFilterDateStart(e.target.value)} /></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">Fecha Fin</label><input type="date" className="p-2 border rounded border-gray-300 text-sm" value={filterDateEnd} onChange={e => setFilterDateEnd(e.target.value)} /></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">Vendedor</label><select className="p-2 border rounded border-gray-300 text-sm bg-white min-w-[120px]" value={filterSeller} onChange={e => setFilterSeller(e.target.value)}><option value="all">Todos</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">Método Pago</label><select className="p-2 border rounded border-gray-300 text-sm bg-white min-w-[120px]" value={filterMethod} onChange={e => setFilterMethod(e.target.value)}><option value="all">Todos</option><option>Efectivo</option><option>Tarjeta</option><option>Vales</option><option>Transferencia</option></select></div>
-                <div className="flex-1 text-right text-sm text-gray-400 self-center">{filteredSales.length} tickets encontrados</div>
+        <div className="space-y-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div><h2 className="text-2xl font-bold text-[#1A1A1A]">Reporte Financiero</h2><p className="text-sm text-gray-500">Vista general de flujos y caja</p></div>
+                <div className="flex gap-2 bg-white p-1 rounded border border-gray-300 shadow-sm">
+                    <button onClick={() => setTimeRange('today')} className={`px-3 py-1 rounded text-xs font-bold ${timeRange === 'today' ? 'bg-[#0F4C3A] text-white' : 'text-gray-600'}`}>Hoy</button>
+                    <button onClick={() => setTimeRange('week')} className={`px-3 py-1 rounded text-xs font-bold ${timeRange === 'week' ? 'bg-[#0F4C3A] text-white' : 'text-gray-600'}`}>Semana</button>
+                    <button onClick={() => setTimeRange('month')} className={`px-3 py-1 rounded text-xs font-bold ${timeRange === 'month' ? 'bg-[#0F4C3A] text-white' : 'text-gray-600'}`}>Mes</button>
+                    <button onClick={() => setTimeRange('custom')} className={`px-3 py-1 rounded text-xs font-bold ${timeRange === 'custom' ? 'bg-[#0F4C3A] text-white' : 'text-gray-600'}`}>Rango</button>
+                </div>
+                <div className="flex gap-2">
+                    {timeRange === 'custom' && (<div className="flex gap-1 items-center bg-white border rounded px-2"><input type="date" className="text-xs p-1" value={customStart} onChange={e => setCustomStart(e.target.value)}/><span>-</span><input type="date" className="text-xs p-1" value={customEnd} onChange={e => setCustomEnd(e.target.value)}/></div>)}
+                    <Button variant="outline" icon={FileSpreadsheet} onClick={exportExcel}>Exportar</Button>
+                    {timeRange === 'today' && (!isShiftOpen 
+                        ? <Button variant="secondary" onClick={() => setIsCashModalOpen(true)}>Abrir Caja</Button> 
+                        : <Button variant="danger" onClick={handleCloseShift}>Corte Caja</Button>
+                    )}
+                </div>
             </div>
-            <Card className="flex-1 overflow-auto" title="Historial de Ventas">
-                <table className="w-full text-left border-collapse">
-                    <thead className="bg-gray-50 text-gray-500 text-sm font-bold sticky top-0 z-10">
-                        <tr><th className="p-3 border-b border-gray-300">Folio</th><th className="p-3 border-b border-gray-300">Hora</th><th className="p-3 border-b border-gray-300">Vendedor</th><th className="p-3 border-b border-gray-300">Método</th><th className="p-3 border-b text-right border-gray-300">Total</th><th className="p-3 border-b text-center border-gray-300">Acciones</th></tr>
-                    </thead>
-                    <tbody className="text-sm">
-                        {filteredSales.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-gray-400">No hay ventas registradas con estos filtros.</td></tr>}
-                        {filteredSales.slice().reverse().map(sale => {
-                            const sellerName = users.find(u => u.id === sale.user_id)?.name || 'Desc.'; 
-                            return (
-                                <tr key={sale.id} className="hover:bg-gray-50 border-b border-gray-300 last:border-0">
-                                    <td className="p-3 font-mono font-bold text-[#0F4C3A]">#{sale.folio || sale.id}</td><td className="p-3 text-gray-500">{formatTime(sale.date)} <span className="text-xs">{new Date(sale.date).toLocaleDateString()}</span></td><td className="p-3">{sellerName}</td><td className="p-3 text-gray-500">{sale.method || 'N/A'}</td><td className="p-3 text-right font-bold">{formatCurrency(sale.total)}</td>
-                                    <td className="p-3 flex justify-center gap-2">
-                                        <button onClick={() => fetchSaleDetails({...sale, sellerName})} className="p-2 bg-blue-50 text-blue-600 rounded hover:bg-blue-100" title="Ver Ticket"><FileText size={16} /></button>
-                                        {sale.status === 'completed' && (currentUser.role === 'admin' || currentUser.role === 'dueño') && <button onClick={() => onCancelSale(sale.id)} className="p-2 bg-red-50 text-red-600 rounded hover:bg-red-100" title="Cancelar Venta"><X size={16} /></button>}
-                                    </td>
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
-            </Card>
-            <Modal isOpen={!!selectedSale} onClose={handleCloseModal} title={`Detalle de Venta #${selectedSale?.folio || selectedSale?.id}`} footer={<Button onClick={handleCloseModal} variant="primary" className="w-full">Cerrar</Button>}>
-                {selectedSale && (
-                    <div className="space-y-4 font-mono text-sm bg-gray-50 p-4 rounded border">
-                        <div className="text-center border-b pb-2 mb-2"><div className="font-bold text-lg">Frutería ICI</div><div>{getCurrentDate()} - {formatTime(selectedSale.date)}</div><div>Atendió: {selectedSale.sellerName}</div></div>
+
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                <Card className="border-l-4 border-l-[#0F4C3A]"><div className="text-xs font-bold text-gray-500 uppercase">Ventas Totales</div><div className="text-3xl font-bold text-[#0F4C3A] mt-1">{formatCurrency(totalSales)}</div><div className="text-xs text-gray-400 mt-2">{filteredData.sales.length} transacciones</div></Card>
+                <Card className="border-l-4 border-l-blue-500"><div className="text-xs font-bold text-gray-500 uppercase">Flujo de Efectivo (Caja)</div><div className="text-3xl font-bold text-blue-600 mt-1">{formatCurrency(theoreticalCash)}</div><div className="text-xs text-blue-400 mt-2">Dinero físico esperado</div></Card>
+                <Card className="border-l-4 border-l-red-600"><div className="text-xs font-bold text-gray-500 uppercase">Salidas (Pagos)</div><div className="text-3xl font-bold text-red-600 mt-1">{formatCurrency(totalCashPayments)}</div><div className="text-xs text-red-400 mt-2">Pagos en efectivo</div></Card>
+                <Card className="border-l-4 border-l-pink-500"><div className="text-xs font-bold text-gray-500 uppercase">Costo de Ventas (CMV)</div><div className="text-3xl font-bold text-pink-600 mt-1">{formatCurrency(totalCostSold)}</div><div className="text-xs text-pink-400 mt-2">Costo de la mercancía vendida</div></Card>
+                <Card className="border-l-4 border-l-[#FFC857]"><div className="text-xs font-bold text-gray-500 uppercase">Fondo Inicial</div><div className="text-3xl font-bold text-[#1A1A1A] mt-1">{formatCurrency(totalFunds)}</div><div className="text-xs text-gray-400 mt-2">Aperturas en periodo</div></Card>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Card className="border-l-4 border-l-indigo-500">
+                    <div className="text-xs font-bold text-gray-500 uppercase">Desglose Ventas</div>
+                    <div className="mt-1">
+                        <div className="flex justify-between text-sm"><span>Efectivo:</span> <span className="font-bold">{formatCurrency(totalCashSales)}</span></div>
+                        <div className="flex justify-between text-sm"><span>Digital:</span> <span className="font-bold text-indigo-600">{formatCurrency(totalDigital)}</span></div>
+                    </div>
+                </Card>
+                <Card className="border-l-4 border-l-orange-500">
+                    <div className="text-xs font-bold text-gray-500 uppercase">Mermas (Pérdidas)</div>
+                    <div className="text-2xl font-bold text-orange-600 mt-1">{formatCurrency(totalWaste)}</div>
+                    <div className="text-xs text-gray-400 mt-1">{filteredData.waste.length} registros (costo)</div>
+                </Card>
+                <Card className="border-l-4 border-l-teal-500">
+                    <div className="text-xs font-bold text-gray-500 uppercase">Utilidad Bruta</div>
+                    <div className="text-2xl font-bold text-teal-600 mt-1">{formatCurrency(grossProfit)}</div>
+                    <div className="text-xs text-gray-400 mt-1">Ventas - Costos - Mermas</div>
+                </Card>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <Card title="Tendencia de Ventas" className="col-span-2">
+                    <div className="h-48 w-full">
+                        {chartData.length > 0 ? <SimpleBarChart data={chartData} /> : <div className="h-full flex items-center justify-center text-gray-400">Sin datos para graficar</div>}
+                    </div>
+                </Card>
+                <Card title="Resumen de Caja (Cálculo)">
+                    <div className="space-y-3 text-sm">
+                        <div className="flex justify-between"><span>(+) Fondos Apertura:</span><span className="font-bold">{formatCurrency(totalFunds)}</span></div>
+                        <div className="flex justify-between"><span>(+) Ventas Efectivo:</span><span className="font-bold text-green-600">{formatCurrency(totalCashSales)}</span></div>
+                        <div className="flex justify-between border-b border-gray-300 pb-2"><span>(-) Pagos Efectivo:</span><span className="font-bold text-red-600">-{formatCurrency(totalCashPayments)}</span></div>
+                        <div className="flex justify-between pt-2 text-lg font-bold"><span>= Total en Caja:</span><span className="text-blue-600">{formatCurrency(theoreticalCash)}</span></div>
                         
-                        {isDetailLoading ? (
-                            <div className='text-center text-gray-500'>Cargando detalles...</div>
-                        ) : (
-                            <div className="space-y-1">
-                                {saleItemsDetail.length > 0 ? (
-                                    saleItemsDetail.map((item, idx) => <div key={idx} className="flex justify-between"><span>{item.qty.toFixed(item.unit === 'kg' ? 3 : 0)} {item.unit || 'uds'} {item.name}</span><span>{formatCurrency(item.total)}</span></div>)
-                                ) : (
-                                    <div className='text-center text-gray-500'>Detalle no disponible.</div>
-                                )}
+                        {/* Mostrar la diferencia si la caja está cerrada en este turno */}
+                        {currentFund && currentFund.closedAt && currentFund.difference !== null && (
+                            <div className="pt-2 text-sm font-bold border-t border-dashed border-gray-300">
+                                <div className="flex justify-between">
+                                    <span>Contado:</span>
+                                    <span className="text-gray-700">{formatCurrency(currentFund.finalCounted)}</span>
+                                </div>
+                                <div className="flex justify-between text-lg">
+                                    <span>Diferencia (Sobrante/Faltante):</span>
+                                    <span className={currentFund.difference >= 0 ? 'text-green-600' : 'text-red-600'}>
+                                        {formatCurrency(currentFund.difference)}
+                                    </span>
+                                </div>
                             </div>
                         )}
-                        
-                        <div className="border-t pt-2 flex justify-between font-bold text-lg"><span>Total</span><span>{formatCurrency(selectedSale.total)}</span></div>
-                        <div className="flex justify-between text-xs text-gray-500"><span>Pago: {selectedSale.method || 'N/A'}</span><span>Recibido: {formatCurrency(selectedSale.received || 0)}</span></div>
-                        <div className="flex justify-between text-xs text-gray-500"><span>Cambio:</span><span>{formatCurrency(selectedSale.change || selectedSale.received - selectedSale.total || 0)}</span></div>
                     </div>
-                )}
+                </Card>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Card title="Top 5 Productos Más Vendidos (Cantidad)">
+                   <div className="space-y-2">
+                    {topProducts.length === 0 ? <p className="text-gray-400 text-center text-xs">Sin datos</p> : topProducts.map(([name, qty], idx) => (
+                        <div key={name} className="flex justify-between text-sm border-b pb-1 border-gray-300">
+                            <span>{idx + 1}. {name}</span>
+                            <span className="font-bold">{qty.toFixed(1)}</span>
+                        </div>
+                    ))}
+                   </div>
+                </Card>
+                <Card title="Mayores Pérdidas (Mermas - Costo)">
+                   <div className="space-y-2">
+                    {topWasteProducts.length === 0 ? <p className="text-gray-400 text-center text-xs">Sin datos</p> : topWasteProducts.map(([name, cost], idx) => (
+                        <div key={name} className="flex justify-between text-sm border-b pb-1 text-red-600">
+                            <span>{idx + 1}. {name}</span>
+                            <span className="font-bold">-{formatCurrency(cost)}</span>
+                        </div>
+                    ))}
+                   </div>
+                </Card>
+            </div>
+
+            <Card title="Detalle de Movimientos (Entradas y Salidas de Efectivo y Venta Total)">
+                <div className="max-h-80 overflow-y-auto">
+                    <table className="w-full text-xs text-left">
+                           <thead className="bg-gray-50 text-gray-500 sticky top-0">
+                                <tr><th className="p-2">Hora</th><th className="p-2">Tipo</th><th className="p-2">Descripción</th><th className="p-2">Método</th><th className="p-2 text-right">Monto</th></tr>
+                           </thead>
+                           <tbody>
+                                {filteredData.allMovements.length === 0 ? <tr><td colSpan="5" className="p-4 text-center text-gray-400">Sin movimientos</td></tr> : 
+                                    filteredData.allMovements.map((m, idx) => (
+                                       <tr key={idx} className="border-b border-gray-300 hover:bg-gray-50">
+                                            <td className="p-2">{formatDateShort(m.dateObj)} {formatTime(m.dateObj)}</td>
+                                            <td className="p-2 font-bold">{m.type}</td>
+                                            <td className="p-2 text-gray-500">{m.folio ? `Ticket #${m.folio}` : (m.supplierId ? `Pago Proveedor ID ${m.supplierId}` : (m.type === 'Apertura Caja' ? 'Fondo de Caja' : 'Movimiento de Caja'))}</td>
+                                            <td className="p-2">{m.method || 'Efectivo'}</td>
+                                            <td className={`p-2 text-right font-bold ${m.isPositive ? 'text-green-600' : 'text-red-600'}`}>{m.isPositive ? '+' : '-'}{formatCurrency(m.amount)}</td>
+                                       </tr>
+                                    ))
+                                }
+                           </tbody>
+                    </table>
+                </div>
+            </Card>
+
+            {/* --- MODAL APERTURA DE CAJA --- */}
+            <Modal isOpen={isCashModalOpen} onClose={() => setIsCashModalOpen(false)} title="Apertura de Caja">
+                <form onSubmit={handleOpenShift} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-bold mb-1">Monto Inicial (Fondo)</label>
+                        <input 
+                            type="number" 
+                            className="w-full p-3 border rounded text-2xl font-bold" 
+                            autoFocus 
+                            required 
+                            value={openingAmount} 
+                            onChange={e => setOpeningAmount(e.target.value)} 
+                            placeholder="$0.00"
+                            step="0.01"
+                        />
+                    </div>
+                    <div className="flex justify-end pt-2">
+                        <Button variant="primary" type="submit">Iniciar Turno</Button>
+                    </div>
+                </form>
+            </Modal>
+            
+            {/* --- MODAL CIERRE DE CAJA --- */}
+            <Modal isOpen={isCloseModalOpen} onClose={() => setIsCloseModalOpen(false)} title="Corte y Cierre de Caja">
+                <form onSubmit={handleFinalClose} className="space-y-4">
+                    {/* Mostrar el teórico actual */}
+                    <div className="p-3 bg-blue-50 border-l-4 border-blue-500 rounded">
+                        <p className="text-sm text-blue-800">Caja Teórica Esperada:</p>
+                        <p className="text-2xl font-bold text-blue-600">{formatCurrency(theoreticalCash)}</p>
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-bold mb-1">Monto Contado (Dinero Físico en Caja)</label>
+                        <input 
+                            type="number" 
+                            className="w-full p-3 border rounded text-2xl font-bold focus:ring-2 focus:ring-blue-500" 
+                            autoFocus 
+                            required 
+                            value={closingAmount} 
+                            onChange={e => setClosingAmount(e.target.value)} 
+                            placeholder={formatCurrency(theoreticalCash).replace('$', '')} 
+                            step="0.01"
+                        />
+                    </div>
+                    
+                    <div className="flex justify-between pt-2">
+                        <Button variant="ghost" onClick={() => setIsCloseModalOpen(false)}>Cancelar</Button>
+                        <Button variant="danger" type="submit">Cerrar Turno y Calcular Diferencia</Button>
+                    </div>
+                </form>
             </Modal>
         </div>
     );
 };
 
-// --- SUB-COMPONENTE: MODAL DE COBRO (Sin cambios relevantes) ---
-const CheckoutModal = ({ isOpen, onClose, total, onConfirm }) => {
-    const [received, setReceived] = useState('');
-    const [method, setMethod] = useState('Efectivo');
-    const [printTicket, setPrintTicket] = useState(true);
-    
-    const change = (parseFloat(received || 0) - total);
-    const canPay = (method === 'Efectivo' && parseFloat(received || 0) >= total) || method !== 'Efectivo';
-
-    if (!isOpen) return null;
-
-    const handleConfirm = () => {
-        onConfirm({ method, received: parseFloat(received || 0), change: Math.max(0, change), printTicket });
-    };
-
-    return (
-        <Modal isOpen={isOpen} onClose={onClose} title="Finalizar Venta">
-            <div className="space-y-6">
-                <div className="text-center py-4 bg-gray-50 rounded-xl border border-dashed border-gray-300"><p className="text-gray-500 text-sm uppercase tracking-wide">Total a Pagar</p><p className="text-5xl font-bold text-[#0F4C3A] mt-2">{formatCurrency(total)}</p></div>
-                <div><label className="text-sm font-bold text-[#4A4A4A] mb-2 block">Método de Pago</label><div className="grid grid-cols-2 gap-2">{['Efectivo', 'Tarjeta', 'Vales', 'Transferencia'].map(m => <button key={m} onClick={() => { setMethod(m); setReceived(m === 'Efectivo' ? '' : total.toFixed(2)); }} className={`p-3 rounded-lg border text-sm font-bold transition-all ${method === m ? 'bg-[#0F4C3A] text-white border-[#0F4C3A] shadow-md' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>{m}</button>)}</div></div>
-                {method === 'Efectivo' && (
-                    <div className="bg-[#FFC857]/10 p-4 rounded-xl border border-[#FFC857]/50">
-                        <label className="text-sm font-bold text-[#1A1A1A] mb-2 block">Dinero Recibido</label>
-                        <div className="relative"><span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 font-bold">$</span><input type="number" className="w-full pl-8 pr-4 py-3 text-2xl font-bold rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#FFC857] outline-none" value={received} onChange={e => setReceived(e.target.value)} autoFocus placeholder={total.toFixed(2)}/></div>
-                        <div className="mt-4 flex justify-between items-center border-t border-[#FFC857]/30 pt-4"><span className="font-bold text-gray-600">Cambio:</span><span className={`text-2xl font-bold ${change >= 0 ? 'text-[#0F4C3A]' : 'text-red-500'}`}>{change >= 0 ? formatCurrency(change) : 'Falta dinero'}</span></div>
-                    </div>
-                )}
-                {method !== 'Efectivo' && (
-                     <div className="bg-gray-100 p-4 rounded-xl border border-gray-300">
-                        <p className="text-sm font-bold text-[#1A1A1A] mb-2 block">Monto Pagado</p>
-                        <p className="text-2xl font-bold text-[#0F4C3A]">{formatCurrency(total)} (Total Exacto)</p>
-                     </div>
-                )}
-                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border"><div className="flex items-center gap-2"><Printer size={18} className="text-gray-500"/><span className="text-sm font-medium">Imprimir Ticket</span></div><button onClick={() => setPrintTicket(!printTicket)} className={`w-12 h-6 rounded-full transition-colors relative ${printTicket ? 'bg-[#0F4C3A]' : 'bg-gray-300'}`}><div className={`w-4 h-4 bg-white rounded-full absolute top-1 transition-transform ${printTicket ? 'left-7' : 'left-1'}`}></div></button></div>
-            </div>
-            <div className="mt-6 flex gap-3"><Button variant="ghost" onClick={onClose} className="flex-1">Cancelar</Button><Button variant="primary" className="flex-1 py-3 text-lg shadow-lg" disabled={!canPay} onClick={handleConfirm}>Confirmar Cobro</Button></div>
-        </Modal>
-    );
-};
-
-// ----------------------------------------------------------------------
-// --- COMPONENTE PRINCIPAL POS (Ajustes de Folio y Lógica de Venta) ---
-// ----------------------------------------------------------------------
-const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, setHeldSales, setProducts }) => {
-    const [view, setView] = useState('terminal'); 
-    const [cart, setCart] = useState([]);
-    const [weight, setWeight] = useState(0.000);
-    const [searchTerm, setSearchTerm] = useState('');
-    const [selectedSeller, setSelectedSeller] = useState(currentUser.id);
-    const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-    
-    // ESTADOS: nextFolio a null para forzar la carga
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState(null);
-    const [nextFolio, setNextFolio] = useState(null); 
-    
-    const captureWeight = () => { setWeight(parseFloat((Math.random() * 2 + 0.1).toFixed(3))); };
-
-    // ----------------------------------------------------
-    // LÓGICA DE FOLIO (VERSIÓN 100% SEGURA CON MAX)
-    // ----------------------------------------------------
-    const fetchLastFolio = useCallback(async () => {
-        // La consulta busca el folio MÁS GRANDE y que NO SEA NULL
-        const { data, error } = await supabase
-            .from('sales')
-            .select('folio')
-            .not('folio', 'is', null) // <-- FILTRO CLAVE: Ignora los NULLS de ventas viejas
-            .order('folio', { ascending: false })
-            .limit(1);
-
-        if (error) {
-            console.error("Error al obtener el último folio:", error);
-            setError("⚠️ Error al conectar con la base de datos para obtener el folio. Se usará el último conocido.");
-            setNextFolio(INITIAL_FOLIO); // Fallback si la DB está inaccesible
-            return; 
-        }
-
-        if (data && data.length > 0 && data[0].folio) {
-            const lastFolio = data[0].folio;
-            // Corregimos el folio local si es menor al valor de la DB
-            setNextFolio(Math.max(lastFolio + 1, nextFolio || INITIAL_FOLIO)); 
-            setError(null); // Si la carga fue exitosa, limpiamos el error
-        } else {
-            // Si no hay folios no nulos, iniciamos con 1000
-            setNextFolio(INITIAL_FOLIO);
-            setError(null);
-        }
-    }, [nextFolio]);
-
-    useEffect(() => {
-        fetchLastFolio();
-    }, [fetchLastFolio]); 
-
-    // --- FUNCIONES DE LÓGICA DE NEGOCIO (VENTAS) ---
-
-    // Función para GUARDAR la venta en Supabase y DESCONTAR stock
-    const handleSaveSale = async (paymentData) => {
-        // Bloqueo si el folio es null (aún no se carga), carrito vacío, o hay error
-        if (cart.length === 0 || isLoading || error || nextFolio === null) return; 
-
-        setIsLoading(true);
-        setError(null);
-
-        // 1. Objeto para la cabecera de la Venta (Tabla 'sales')
-        const newSaleHeader = {
-            date: new Date().toISOString(),
-            user_id: selectedSeller, 
-            total: cartTotal,
-            method: paymentData.method, 
-            received: paymentData.received,
-            change: paymentData.change,
-            status: 'completed',
-            folio: nextFolio, // <-- USAMOS EL FOLIO SEGURO
-        };
-
-        try {
-            // 1. Insertar la cabecera de la venta en 'sales'
-            const { data: saleData, error: saleError } = await supabase
-                .from('sales')
-                .insert([{
-                    user_id: newSaleHeader.user_id,
-                    total: newSaleHeader.total,
-                    date: newSaleHeader.date,
-                    method: newSaleHeader.method, 
-                    received: newSaleHeader.received,
-                    status: newSaleHeader.status,
-                    folio: newSaleHeader.folio, 
-                }])
-                .select('*')
-                .single();
-            
-            if (saleError) throw saleError;
-            const newSaleId = saleData.id;
-            
-            // 2. Preparar e insertar los items en 'sale_items'
-            
-            // FILTRO CRUCIAL (solución a error 23503)
-            const validCartItems = cart.filter(item => {
-                // Solo incluimos productos que existen en nuestro estado local (products)
-                const exists = products.some(p => p.id === item.id);
-                if (!exists) {
-                    // Solo mostramos un error en consola para que no detenga la venta
-                    console.error(`ERROR 23503 (FK): Producto ID ${item.id} (${item.name}) no encontrado. Se omitirá en esta venta.`);
-                }
-                return exists;
-            });
-
-            if (validCartItems.length === 0) {
-                // Si el carrito estaba lleno pero todos los productos fueron borrados
-                throw new Error("El carrito no contiene productos válidos para guardar. Venta cancelada.");
-            }
-
-
-            const itemsForInsert = validCartItems.map(item => ({
-                sale_id: newSaleId,
-                product_id: item.id, // item.id es el product_id
-                quantity: item.qty,
-                price: item.price, 
-                subtotal: item.total,
-            }));
-            
-            const { error: itemsError } = await supabase
-                .from('sale_items')
-                .insert(itemsForInsert);
-
-            if (itemsError) throw itemsError;
-
-            // 3. Actualizar el stock de los productos
-            // Usamos validCartItems para descontar solo los que se guardaron
-            const stockUpdates = validCartItems.map(item => {
-                const currentProduct = products.find(p => p.id === item.id);
-                if (!currentProduct) return null; // Ya filtrados, pero seguridad extra
-                
-                const newStock = currentProduct.stock - item.qty;
-                
-                return {
-                    id: item.id,
-                    stock: newStock,
-                };
-            }).filter(Boolean);
-
-            const { data: updatedProducts, error: stockError } = await supabase
-                .from('products')
-                .upsert(stockUpdates, { onConflict: 'id' }) 
-                .select('id, stock'); 
-
-            if (stockError) throw stockError;
-            
-            // 4. Actualizar estado local y el siguiente folio
-            setSales([...sales, {...saleData, id: newSaleId, items: cart}]); 
-            setProducts(products.map(p => {
-                const updated = updatedProducts.find(up => up.id === p.id);
-                return updated ? { ...p, stock: updated.stock } : p;
-            }));
-
-            // Aumentar el folio DESPUÉS de una inserción exitosa
-            setNextFolio(newSaleHeader.folio + 1); 
-
-            setCart([]);
-            setIsCheckoutOpen(false);
-            alert(`Venta #${newSaleHeader.folio} registrada y stock descontado.`);
-
-        } catch (err) {
-            console.error('Error al guardar la venta:', err);
-            
-            // TRATAMIENTO ESPECÍFICO DEL ERROR DE FOLIO DUPLICADO (23505)
-            if (err.code === "23505") {
-                setError(`🚨 ¡Conflicto de Folio! El folio ${nextFolio} ya existe. Recalculando...`);
-                alert("Conflicto de Folio detectado. Presione 'Aceptar', espere a que se recalcule el folio y vuelva a intentar el cobro.");
-                
-                // Bloqueamos el botón y forzamos el recálculo
-                setNextFolio(null);
-                await fetchLastFolio(); 
-                
-                // Limpiamos el error si el recálculo fue exitoso
-                setError(null); 
-                
-            } else {
-                 setError(`Error al procesar la venta: ${err.message}. Revise la consola.`);
-                 alert("Fallo crítico al guardar la venta. Revise la consola.");
-            }
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    // Función para CANCELAR la venta y DEVOLVER stock (Sin cambios relevantes)
-    const handleCancelSale = async (saleId) => {
-        if (!window.confirm("¿Está seguro de CANCELAR esta venta? Esta acción no se puede deshacer y devolverá el stock al inventario.")) {
-            return;
-        }
-        setIsLoading(true);
-        setError(null);
-        
-        const saleToCancel = sales.find(s => s.id === saleId);
-        if (!saleToCancel || saleToCancel.status === 'cancelled') {
-            alert("Esta venta ya ha sido cancelada.");
-            setIsLoading(false);
-            return;
-        }
-        
-        try {
-            // 1. Obtener los productos de la venta cancelada desde la tabla de detalles
-            const { data: saleItems, error: itemsFetchError } = await supabase
-                .from('sale_items')
-                .select('product_id, quantity')
-                .eq('sale_id', saleId);
-            
-            if (itemsFetchError || !saleItems || saleItems.length === 0) {
-                 throw new Error("No se encontraron detalles de la venta en 'sale_items'. No se puede devolver stock.");
-            }
-            
-            // 2. Marcar la venta como 'cancelled' en la tabla 'sales'
-            const { error: cancelError } = await supabase
-                .from('sales')
-                .update({ status: 'cancelled' })
-                .eq('id', saleId);
-
-            if (cancelError) throw cancelError;
-
-            // 3. Devolver el stock
-            const stockReturns = saleItems.map(item => {
-                const currentProduct = products.find(p => p.id === item.product_id);
-                if (!currentProduct) return null;
-                
-                const newStock = currentProduct.stock + item.quantity;
-                
-                return {
-                    id: item.product_id,
-                    stock: newStock,
-                };
-            }).filter(Boolean);
-
-            const { data: returnedProducts, error: stockError } = await supabase
-                .from('products')
-                .upsert(stockReturns, { onConflict: 'id' })
-                .select('id, stock'); 
-
-            if (stockError) throw stockError;
-            
-            // 4. Actualizar estado local
-            setSales(sales.map(s => s.id === saleId ? { ...s, status: 'cancelled' } : s));
-
-            setProducts(products.map(p => {
-                const updated = returnedProducts.find(up => up.id === p.id);
-                return updated ? { ...p, stock: updated.stock } : p;
-            }));
-
-            alert(`✅ Venta #${saleToCancel.folio || saleToCancel.id} CANCELADA y stock devuelto.`);
-
-        } catch (err) {
-            console.error('Error al cancelar la venta:', err);
-            setError(`Error al cancelar la venta: ${err.message}. Revise la consola.`);
-            alert("Fallo crítico al cancelar la venta. Revise la consola.");
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
-    // --- OTRAS FUNCIONES ---
-    useEffect(() => {
-        const handleKeyPress = (e) => {
-            if (view !== 'terminal') return;
-            if (e.key === 'F1') captureWeight();
-            // Bloqueo del F2 ahora depende de nextFolio !== null
-            if (e.key === 'F2') { if (cart.length > 0 && !isLoading && !error && nextFolio !== null) setIsCheckoutOpen(true); } 
-            if (e.key === 'Escape') { if(cart.length > 0 && window.confirm("¿Limpiar carrito?")) setCart([]); }
-        };
-        window.addEventListener('keydown', handleKeyPress);
-        return () => window.removeEventListener('keydown', handleKeyPress);
-    }, [view, cart, isLoading, error, nextFolio]); 
-
-    // Función para añadir productos al carrito (con chequeo de stock)
-    const addToCart = (product) => {
-        const currentProductInStock = products.find(p => p.id === product.id);
-        if (!currentProductInStock) { return; } 
-
-        let qtyToAdd = 1;
-        let total = product.price;
-        let requestedQty;
-
-        const existingItem = cart.find(item => item.id === product.id);
-
-        if (product.unit === 'kg') {
-            if (weight <= 0) {
-                alert("Por favor capture el peso primero.");
-                return;
-            }
-            qtyToAdd = weight;
-            total = product.price * weight;
-            requestedQty = existingItem ? (existingItem.qty + qtyToAdd) : qtyToAdd;
-
-        } else {
-            requestedQty = existingItem ? (existingItem.qty + 1) : 1;
-        }
-
-        if (requestedQty > currentProductInStock.stock) {
-            alert(`Stock insuficiente. Solo quedan ${currentProductInStock.stock.toFixed(2)} ${product.unit} de ${product.name}.`);
-            if (product.unit === 'kg') setWeight(0); 
-            return; 
-        }
-
-        const itemToAdd = { 
-            ...product, 
-            qty: qtyToAdd, 
-            total, 
-            costAtSale: product.cost, 
-            product_id: product.id 
-        };
-
-        if (existingItem) {
-            const newCart = [...cart];
-            const existingItemIndex = newCart.findIndex(item => item.id === product.id);
-            
-            newCart[existingItemIndex].qty += qtyToAdd;
-            newCart[existingItemIndex].total = newCart[existingItemIndex].qty * newCart[existingItemIndex].price;
-            
-            setCart(newCart);
-        } else {
-            setCart([...cart, itemToAdd]);
-        }
-        
-        if (product.unit === 'kg') setWeight(0);
-    };
-
-    const updateCartQty = (idx, delta) => {
-        const newCart = [...cart];
-        const item = newCart[idx];
-        if (item.unit === 'kg') return; 
-
-        const currentProductInStock = products.find(p => p.id === item.id);
-        const requestedQty = item.qty + delta;
-
-        if (delta > 0 && requestedQty > currentProductInStock.stock) {
-             alert(`Stock insuficiente. Solo quedan ${currentProductInStock.stock.toFixed(2)} ${item.unit} de ${item.name}.`);
-             return;
-        }
-
-        if (requestedQty <= 0) {
-            newCart.splice(idx, 1);
-        } else {
-            item.qty = requestedQty;
-            item.total = requestedQty * item.price;
-        }
-        setCart(newCart);
-    };
-
-    const holdSale = () => {
-        if (cart.length === 0) return;
-        setHeldSales([...heldSales, { id: Date.now(), items: cart, seller: selectedSeller, time: new Date() }]);
-        setCart([]);
-    };
-
-    const restoreSale = (sale) => {
-        setCart(sale.items);
-        setSelectedSeller(sale.seller);
-        setHeldSales(heldSales.filter(s => s.id !== sale.id));
-    };
-
-    const cartTotal = cart.reduce((sum, item) => sum + item.total, 0);
-
-    return (
-        <div className="h-full flex flex-col gap-4">
-            <div className="flex gap-2 bg-white p-2 rounded-lg border-gray-300 border shadow-sm w-fit">
-                <button onClick={() => setView('terminal')} className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${view === 'terminal' ? 'bg-[#0F4C3A] text-white' : 'text-gray-500 hover:bg-gray-100'}`}><Calculator size={18}/> Terminal Venta</button>
-                <button onClick={() => setView('history')} className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 ${view === 'history' ? 'bg-[#0F4C3A] text-white' : 'text-gray-500 hover:bg-gray-100'}`}><History size={18}/> Historial</button>
-            </div>
-
-            {/* ZONA DE MENSAJES */}
-            {error && <div className="p-3 bg-red-100 text-red-700 font-medium rounded">Error: {error}</div>}
-            {isLoading && <div className="p-3 bg-blue-100 text-blue-700 font-medium rounded">Procesando... Por favor, espere.</div>}
-            {nextFolio === null && !error && <div className="p-3 bg-yellow-100 text-yellow-700 font-medium rounded">Cargando el Folio de Venta... Por favor, espere.</div>}
-            
-            {view === 'history' ? (
-                <SalesHistory sales={sales} users={users} onCancelSale={handleCancelSale} currentUser={currentUser} />
-            ) : (
-                <div className="flex flex-col md:flex-row h-full gap-4 overflow-hidden flex-1">
-                    <div className="flex-1 flex flex-col gap-4 overflow-hidden">
-                        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col md:flex-row gap-4 items-center">
-                            <div className="flex-1 w-full relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20}/><input className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0F4C3A] outline-none" placeholder="Buscar producto..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} autoFocus /></div>
-                            <div className="flex items-center gap-2 p-2 bg-gray-100 rounded-lg border border-gray-300"><div className="bg-white px-4 py-2 rounded border border-gray-200 font-mono text-2xl font-bold text-[#1A1A1A] w-32 text-right">{weight.toFixed(3)}</div><div className="text-sm font-bold text-gray-500">kg</div><Button variant="secondary" onClick={captureWeight} icon={Scale} title="F1">Capturar</Button></div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto pr-2">
-                            {heldSales.length > 0 && <div className="mb-4 flex gap-2 overflow-x-auto pb-2">{heldSales.map(sale => <button key={sale.id} onClick={() => restoreSale(sale)} className="flex items-center gap-2 bg-orange-100 border border-orange-300 text-orange-800 px-3 py-2 rounded-lg text-sm whitespace-nowrap hover:bg-orange-200"><PauseCircle size={16}/> Ticket en espera (${sale.items.reduce((s,i)=>s+i.total,0).toFixed(0)})</button>)}</div>}
-                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                                {products.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase())).map(product => (
-                                    <button key={product.id} onClick={() => addToCart(product)} disabled={isLoading} className="bg-white border border-gray-200 rounded-xl p-2 hover:shadow-md hover:border-[#0F4C3A] transition-all flex flex-col items-center text-center group active:scale-95 h-40 justify-between">
-                                        <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-3xl mb-1">{product.image || '📦'}</div>
-                                        <div className="font-bold text-[#1A1A1A] text-sm leading-tight line-clamp-2 h-10 w-full">{product.name}</div>
-                                        <div className="w-full flex justify-center items-end gap-1"><span className="text-lg font-bold text-[#0F4C3A]">${product.price}</span><span className="text-xs text-gray-500">/{product.unit}</span></div>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    </div>
-                    <div className="w-full md:w-96 flex flex-col h-full bg-white border border-gray-300 rounded-xl shadow-lg overflow-hidden">
-                        <div className="bg-[#0F4C3A] text-white p-4">
-                            <div className="flex justify-between items-center mb-2"><h2 className="font-bold text-lg flex items-center gap-2"><ShoppingCart size={20}/> Venta Actual</h2><div className="text-xs bg-white/20 px-2 py-1 rounded">Folio: #{nextFolio || '...'}</div></div>
-                            <div className="flex items-center gap-2 bg-[#0a3528] p-2 rounded text-sm"><Users size={16} className="text-[#FFC857]"/><span>Vendedor:</span><select className="bg-transparent border-none outline-none font-bold cursor-pointer flex-1" value={selectedSeller} onChange={(e) => setSelectedSeller(Number(e.target.value))}>{users.filter(u => u.active).map(u => <option key={u.id} value={u.id} className="text-black">{u.name}</option>)}</select></div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-2 space-y-1 bg-gray-50">{cart.length === 0 ? <div className="h-full flex flex-col items-center justify-center text-gray-400 opacity-60"><ShoppingCart size={64} strokeWidth={1} /><p className="mt-4 text-center px-8">Escanea un producto (F1: Pesar)</p></div> : cart.map((item, idx) => (
-                            <div key={idx} className="flex justify-between items-center bg-white p-3 rounded border border-gray-200 shadow-sm animate-in slide-in-from-right-2">
-                                <div className="flex-1"><div className="font-bold text-sm text-[#1A1A1A]">{item.name}</div>
-                                    <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
-                                        {item.unit !== 'kg' && (
-                                            <div className="flex items-center bg-gray-100 rounded border">
-                                                <button onClick={() => updateCartQty(idx, -1)} className="px-2 hover:bg-gray-200">-</button>
-                                                <span className="px-2 font-bold">{item.qty}</span>
-                                                <button onClick={() => updateCartQty(idx, 1)} className="px-2 hover:bg-gray-200">+</button>
-                                            </div>
-                                        )}
-                                        {item.unit === 'kg' && <span>{item.qty.toFixed(3)} kg</span>}
-                                        <span>x ${item.price}</span>
-                                    </div>
-                                </div>
-                                <div className="text-right flex items-center gap-3"><span className="font-bold text-[#0F4C3A]">${item.total.toFixed(2)}</span><button onClick={() => setCart(cart.filter((_, i) => i !== idx))} className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1 rounded"><Trash2 size={16}/></button></div>
-                            </div>
-                        ))}</div>
-                        <div className="p-4 bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-10">
-                            <div className="flex justify-between items-end mb-4"><span className="text-gray-500 font-medium">Total a Pagar</span><span className="text-4xl font-bold text-[#0F4C3A] tracking-tight">{formatCurrency(cartTotal)}</span></div>
-                            <div className="grid grid-cols-2 gap-2 mb-2">
-                                <Button variant="outline" className="border-gray-300 text-gray-600" onClick={() => setCart([])} title="ESC" disabled={isLoading || error}>Cancelar</Button>
-                                <Button variant="secondary" onClick={holdSale} disabled={cart.length === 0 || isLoading || error || nextFolio === null} icon={PauseCircle}>Espera</Button>
-                            </div>
-                            <Button 
-                                variant="accent" 
-                                className="w-full py-4 text-lg shadow-md hover:shadow-lg transform active:scale-[0.98]" 
-                                icon={DollarSign} 
-                                // BLOQUEO CLAVE: nextFolio debe ser diferente de null y no debe haber error.
-                                disabled={cart.length === 0 || isLoading || error || nextFolio === null} 
-                                onClick={() => setIsCheckoutOpen(true)} 
-                                title="F2">
-                                {nextFolio === null ? 'Cargando Folio...' : 'COBRAR AHORA'}
-                            </Button>
-                        </div>
-                    </div>
-                    <CheckoutModal isOpen={isCheckoutOpen} onClose={() => setIsCheckoutOpen(false)} total={cartTotal} onConfirm={handleSaveSale} />
-                </div>
-            )}
-        </div>
-    );
-};
-
-export default POSModule;
+export default ReportsModule;

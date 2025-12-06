@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Search, Edit, Trash2, AlertTriangle, Save, Truck, PackageMinus, DollarSign } from 'lucide-react';
 import { Button, Card, Modal } from '../../components/ui/SharedComponents';
 import { formatCurrency, formatTime } from '../../utils/helpers';
+import { supabase } from '../../supabase/supabaseClient';
 
 // Funciones helpers para Purchase/Waste (simplificadas)
 const calculateTotalCost = (cart) => cart.reduce((sum, item) => sum + (item.buyQty * item.buyCost), 0);

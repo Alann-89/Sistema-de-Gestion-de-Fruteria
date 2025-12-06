@@ -12,7 +12,7 @@ export const INITIAL_DATA = {
     { id: 106, name: 'Leche Entera', category: 'Lácteos', price: 26.00, cost: 21.00, stock: 24, unit: 'lt', code: 'LEC01', minStock: 12, image: '🥛' },
   ],
   suppliers: [
-    { id: 1, name: 'Agropecuaria El Sol', phone: '449-123-4567', debt: 1500.00, visitDay: 'Lunes' },
+    { id: 1, name: 'Agropecuaria El Sol', phone: '449-123-4567', debt: 0.00, visitDay: 'Lunes' },
     { id: 2, name: 'Frutas del Bajío', phone: '449-987-6543', debt: 0.00, visitDay: 'Jueves' },
   ],
   sales: [],

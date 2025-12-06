@@ -216,27 +216,49 @@ const ReportsModule = ({ sales, wasteLogs, cashFunds, setCashFunds, payments }) 
     };
 
     // ------------------------------------------
-    // DATOS PARA GRÁFICOS
+// DATOS PARA GRÁFICOS
     // ------------------------------------------
     const chartData = useMemo(() => {
         if (timeRange === 'today') {
-            const hours = Array(14).fill(0).map((_, i) => ({ label: `${i+8}h`, value: 0 })); 
+            const hours = Array(14).fill(0).map((_, i) => ({ label: `${i+8}h`, value: 0 }));
             filteredData.sales.forEach(s => {
                 const h = new Date(s.date).getHours();
                 // Asumiendo horario de 8h a 21h (14 horas)
                 if (h >= 8 && h <= 21) hours[h-8].value += s.total;
             });
             return hours;
-        } else {
-            const daysMap = {};
+        } else if (timeRange === 'week') {
+            const daysOfWeek = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+            const weekData = daysOfWeek.map(day => ({ label: day, value: 0 }));
+            filteredData.sales.forEach(s => {
+                const date = new Date(s.date);
+                const dayIndex = date.getDay(); // 0 = Domingo, 1 = Lunes, etc.
+                weekData[dayIndex].value += s.total;
+            });
+            return weekData;
+        } else if (timeRange === 'month') {
+            const daysInMonth = new Date(filteredData.end.getFullYear(), filteredData.end.getMonth() + 1, 0).getDate();
+            const monthData = Array.from({ length: daysInMonth }, (_, i) => ({ label: `${i+1}`, value: 0 }));
+            filteredData.sales.forEach(s => {
+                const day = new Date(s.date).getDate();
+                monthData[day - 1].value += s.total;
+            });
+            return monthData;
+        } else if (timeRange === 'custom') {
+            const start = new Date(filteredData.start);
+            const end = new Date(filteredData.end);
+            const days = [];
+            for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+                days.push({ label: formatDateShort(d.toISOString().split('T')[0]), value: 0 });
+            }
             filteredData.sales.forEach(s => {
                 const key = formatDateShort(s.date);
-                if(!daysMap[key]) daysMap[key] = 0;
-                daysMap[key] += s.total;
+                const day = days.find(d => d.label === key);
+                if (day) day.value += s.total;
             });
-            // Mostrar todos los días dentro del rango (limitado por el SimpleBarChart si es necesario)
-            return Object.entries(daysMap).map(([k, v]) => ({ label: k, value: v })); 
+            return days;
         }
+        return [];
     }, [filteredData, timeRange]);
     
     const productStats = {};

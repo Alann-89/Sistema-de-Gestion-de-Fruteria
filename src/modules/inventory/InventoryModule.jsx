@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Search, Edit, Trash2, AlertTriangle, Save, Truck, PackageMinus, DollarSign } from 'lucide-react'; 
-import { supabase } from '../../supabase/supabaseClient'; 
+import { Plus, Search, Edit, Trash2, AlertTriangle, Save, Truck, PackageMinus, DollarSign } from 'lucide-react';
 import { Button, Card, Modal } from '../../components/ui/SharedComponents';
 import { formatCurrency, formatTime } from '../../utils/helpers';
 
@@ -43,47 +42,10 @@ const InventoryModule = ({
     // FUNCIONES DE CARGA DE DATOS (RESTAURADAS Y COMPLETAS)
     // ------------------------------------------
     
-    // Función para obtener las categorías de la DB
-    const fetchCategories = useCallback(async () => {
-        const { data, error } = await supabase
-            .from('categories')
-            .select('id, name'); 
-
-        if (error) {
-            console.error('Error al cargar categorías:', error);
-            setError("No se pudieron cargar las categorías: " + error.message);
-        } else {
-            setCategories(data);
-        }
-    }, []);
-
-    const fetchProducts = useCallback(async () => {
-        setIsLoading(true);
-        setError(null);
-        
-        // 🚨 IMPORTANTE: Usamos la sintaxis anidada 'categories (name)'
-        // Si esta consulta falla (por problemas de caché), se debe recargar el esquema de la API.
-        const { data, error } = await supabase
-            .from('products')
-            .select(`
-                *, 
-                categories (name) 
-            `);
-
-        if (error) {
-            console.error('Error al cargar productos:', error);
-            setError("No se pudieron cargar los productos: " + error.message);
-        } else {
-            setProducts(data);
-        }
-        setIsLoading(false);
-    }, [setProducts]);
-
-    // Cargar productos y categorías al montar el componente
+    // Cargar productos y categorías al montar el componente (local state)
     useEffect(() => {
-        fetchProducts();
-        fetchCategories();
-    }, [fetchProducts, fetchCategories]); 
+        // No se cargan desde DB, se usan los datos iniciales
+    }, []);
 
 
     // ------------------------------------------
@@ -296,7 +258,7 @@ const InventoryModule = ({
         setBuyCost('');
     };
 
-    const finalizePurchase = async () => {
+    const finalizePurchase = () => {
         if (purchaseCart.length === 0) {
             alert("El carrito de compra está vacío.");
             return;
@@ -312,87 +274,66 @@ const InventoryModule = ({
 
         setIsLoading(true);
         setError(null);
-        
+
         const totalCost = calculatePurchaseTotal(purchaseCart);
-        
-        // 1. Insertar la cabecera en 'purchases'
-        try {
-            const { data: purchaseData, error: purchaseError } = await supabase
-                .from('purchases')
-                .insert([{
-                    supplier_id: Number(selectedSupplierId),
-                    date: new Date().toISOString(),
-                    total_cost: totalCost,
-                    user_id: currentUser.id, // Columna user_id debe existir y estar sincronizada
-                }])
-                .select('id')
-                .single();
-            
-            if (purchaseError) throw purchaseError;
-            const newPurchaseId = purchaseData.id;
+        const newPurchaseId = Date.now(); // Usar timestamp como ID único
 
-            // 2. Preparar e insertar los items en 'purchase_items'
-            const itemsForInsert = purchaseCart.map(item => ({
-                purchase_id: newPurchaseId,
-                product_id: item.product_id,
-                quantity: item.buyQty,
-                cost: item.buyCost,
-                // Usar subtotal o calcularlo si la columna existe en purchase_items
-                subtotal: item.buyQty * item.buyCost, 
-            }));
-            
-            const { error: itemsError } = await supabase
-                .from('purchase_items')
-                .insert(itemsForInsert);
+        // Preparar items de la compra
+        const itemsForInsert = purchaseCart.map(item => ({
+            purchase_id: newPurchaseId,
+            product_id: item.product_id,
+            quantity: item.buyQty,
+            cost: item.buyCost,
+            subtotal: item.buyQty * item.buyCost,
+        }));
 
-            if (itemsError) throw new Error("Error al guardar detalles de compra: " + itemsError.message);
-            
-            // 3. Preparar las actualizaciones de 'products' (stock y costo promedio)
-            const productUpdates = products.map(p => {
-                const purchasedItem = purchaseCart.find(i => i.product_id === p.id);
-                if (!purchasedItem) return null; 
+        // Actualizar productos (stock y costo promedio)
+        const newProductsState = products.map(p => {
+            const purchasedItem = purchaseCart.find(i => i.product_id === p.id);
+            if (!purchasedItem) return p;
 
-                const newStock = p.stock + purchasedItem.buyQty;
-                
-                // Cálculo del Costo Promedio Ponderado (PMP)
-                const currentTotalValue = (p.stock || 0) * (p.cost || 0); // Manejo de NULL/0
-                const purchaseTotalValue = purchasedItem.buyQty * purchasedItem.buyCost;
-                
-                const newAverageCost = (currentTotalValue + purchaseTotalValue) / newStock;
-                
+            const newStock = p.stock + purchasedItem.buyQty;
+
+            // Cálculo del Costo Promedio Ponderado (PMP)
+            const currentTotalValue = (p.stock || 0) * (p.cost || 0);
+            const purchaseTotalValue = purchasedItem.buyQty * purchasedItem.buyCost;
+
+            const newAverageCost = (currentTotalValue + purchaseTotalValue) / newStock;
+
+            return {
+                ...p,
+                stock: newStock,
+                cost: newAverageCost,
+            };
+        });
+
+        // Actualizar proveedores (aumentar deuda)
+        const newSuppliersState = suppliers.map(s => {
+            if (s.id === Number(selectedSupplierId)) {
                 return {
-                    id: p.id,
-                    stock: newStock,
-                    cost: newAverageCost, 
+                    ...s,
+                    debt: (s.debt || 0) + totalCost,
                 };
-            }).filter(p => p !== null); 
-            
-            // 💡 CORRECCIÓN DE SELECT: Ser explícito aquí para evitar el error 'categories'
-            const { data: updatedProducts, error: stockError } = await supabase
-                .from('products')
-                .upsert(productUpdates)
-                .select('id, name, category_id, price, cost, stock, unit, code, min_stock, image'); 
+            }
+            return s;
+        });
 
-            if (stockError) throw new Error("Error al actualizar stock/costo: " + stockError.message);
-            
-            // 4. Actualizar estado local
-            const newProductsState = products.map(p => {
-                const updated = updatedProducts.find(up => up.id === p.id);
-                return updated || p;
-            });
-            setProducts(newProductsState);
-            setPurchases(prev => [...prev, {...purchaseData, total_cost: totalCost, supplier_id: Number(selectedSupplierId), items: itemsForInsert}]);
+        // Actualizar estado local
+        setProducts(newProductsState);
+        setSuppliers(newSuppliersState);
+        setPurchases(prev => [...prev, {
+            id: newPurchaseId,
+            supplier_id: Number(selectedSupplierId),
+            date: new Date().toISOString(),
+            total_cost: totalCost,
+            user_id: currentUser.id,
+            items: itemsForInsert
+        }]);
 
-            setPurchaseCart([]);
-            setSelectedSupplierId('');
-            alert(`✅ Compra #${newPurchaseId} registrada. Stock y costos actualizados.`);
-            
-        } catch (err) {
-            console.error('Error al finalizar compra:', err);
-            setError(`Error al registrar la compra: ${err.message}.`);
-        } finally {
-            setIsLoading(false);
-        }
+        setPurchaseCart([]);
+        setSelectedSupplierId('');
+        setIsLoading(false);
+        alert(`✅ Compra #${newPurchaseId} registrada. Stock y costos actualizados.`);
     };
     
     // ------------------------------------------
@@ -711,9 +652,7 @@ const InventoryModule = ({
                                     type="number"
                                     step="0.01"
                                     value={newPriceValue}
-                                    // 🔑 Solo permite cambios si tiene permisos
                                     onChange={canEdit ? (e) => handlePriceChangeBuffer(p.id, e.target.value) : undefined}
-                                    // 🔑 Deshabilita el input si no tiene permisos
                                     disabled={!canEdit}
                                     className={`w-full p-2 border rounded text-right font-bold text-xl ${hasChanged ? 'border-amber-500 ring-amber-500' : 'border-gray-300'} ${!canEdit ? 'bg-gray-100 cursor-not-allowed text-gray-500' : ''}`}
                                 />

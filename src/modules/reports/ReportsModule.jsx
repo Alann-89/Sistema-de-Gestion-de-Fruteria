@@ -76,7 +76,7 @@ const SalesHistory = ({ sales, users, onCancelSale, currentUser }) => {
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">Fecha Fin</label><input type="date" className="p-2 border rounded border-gray-300 text-sm" value={filterDateEnd} onChange={e => setFilterDateEnd(e.target.value)} /></div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">Vendedor</label><select className="p-2 border rounded border-gray-300 text-sm bg-white min-w-[120px]" value={filterSeller} onChange={e => setFilterSeller(e.target.value)}><option value="all">Todos</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">Método Pago</label><select className="p-2 border rounded border-gray-300 text-sm bg-white min-w-[120px]" value={filterMethod} onChange={e => setFilterMethod(e.target.value)}><option value="all">Todos</option><option>Efectivo</option><option>Tarjeta</option><option>Vales</option><option>Transferencia</option></select></div>
-                <div className="flex-1 text-right text-sm text-gray-400 self-center">{filteredSales.length} tickets encontrados}</div>
+                <div className="flex-1 text-right text-sm text-gray-400 self-center">{filteredSales.length} tickets encontrados</div>
             </div>
             <Card className="flex-1 overflow-auto" title="Historial de Ventas">
                 <table className="w-full text-left border-collapse">

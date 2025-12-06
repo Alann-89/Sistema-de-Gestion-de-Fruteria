@@ -67,8 +67,20 @@ const ReportsModule = ({ sales, wasteLogs, cashFunds, setCashFunds, payments }) 
             end.setHours(23, 59, 59, 999);
         }
 
-        const _sales = sales.filter(s => { const d = new Date(s.date); return d >= start && d <= end; });
-        const _payments = payments.filter(p => { const d = new Date(p.date); return d >= start && d <= end; });
+        const _sales = sales.filter(s => {
+            const d = new Date(s.date);
+            const saleDate = d.toISOString().split('T')[0];
+            const startDate = start.toISOString().split('T')[0];
+            const endDate = end.toISOString().split('T')[0];
+            return saleDate >= startDate && saleDate <= endDate;
+        });
+        const _payments = payments.filter(p => {
+            const d = new Date(p.date);
+            const payDate = d.toISOString().split('T')[0];
+            const startDate = start.toISOString().split('T')[0];
+            const endDate = end.toISOString().split('T')[0];
+            return payDate >= startDate && payDate <= endDate;
+        });
         
         // El filtro de cashFunds debe incluir si la caja fue abierta O cerrada dentro del rango.
         const _funds = cashFunds.filter(f => { 
@@ -170,24 +182,22 @@ const ReportsModule = ({ sales, wasteLogs, cashFunds, setCashFunds, payments }) 
             return;
         }
 
-        if(window.confirm("¿Confirmar el corte de caja con el monto contado?")) {
-            const updated = [...cashFunds];
-            const current = updated[updated.length - 1];
+        const updated = [...cashFunds];
+        const current = updated[updated.length - 1];
 
-            // 1. Calcular Sobrante/Faltante
-            const difference = finalCounted - theoreticalCash;
+        // 1. Calcular Sobrante/Faltante
+        const difference = finalCounted - theoreticalCash;
 
-            // 2. Actualizar el fondo actual
-            current.closedAt = new Date().toISOString(); // Guardar como string
-            current.finalCounted = finalCounted;
-            current.theoreticalCash = theoreticalCash;
-            current.difference = difference;
+        // 2. Actualizar el fondo actual
+        current.closedAt = new Date().toISOString(); // Guardar como string
+        current.finalCounted = finalCounted;
+        current.theoreticalCash = theoreticalCash;
+        current.difference = difference;
 
-            setCashFunds(updated);
-            setClosingAmount('');
-            setIsCloseModalOpen(false);
-            alert(`✅ Corte de Caja completado. Diferencia: ${formatCurrency(difference)}`);
-        }
+        setCashFunds(updated);
+        setClosingAmount('');
+        setIsCloseModalOpen(false);
+        alert(`✅ Corte de Caja completado. Diferencia: ${formatCurrency(difference)}`);
     };
     
     // ------------------------------------------

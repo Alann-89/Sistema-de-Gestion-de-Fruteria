@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Plus, FileText, DollarSign, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
 import { Button, Card, Modal } from '../../components/ui/SharedComponents';
 import { formatCurrency, formatTime, formatDateShort } from '../../utils/helpers';
+import { supabase } from '../../supabase/supabaseClient';
 
 const SuppliersModule = ({ suppliers, setSuppliers, purchases, payments, setPayments }) => {
   const [selectedSupplier, setSelectedSupplier] = useState(null); 

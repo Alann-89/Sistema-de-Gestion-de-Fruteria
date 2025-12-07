@@ -3,7 +3,6 @@ import { FileSpreadsheet } from 'lucide-react';
 import { Button, Card, Modal } from '../../components/ui/SharedComponents';
 import { formatCurrency, formatTime, formatDateShort, downloadCSV } from '../../utils/helpers';
 
-// Componente auxiliar para la gráfica de barras
 const SimpleBarChart = ({ data }) => {
     const maxVal = Math.max(...data.map(d => d.value), 100);
     return (

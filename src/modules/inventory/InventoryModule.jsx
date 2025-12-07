@@ -1,29 +1,31 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Search, Edit, Trash2, AlertTriangle, Save, Truck, PackageMinus, DollarSign } from 'lucide-react';
+import { supabase } from '../../supabase/supabaseClient';
 import { Button, Card, Modal } from '../../components/ui/SharedComponents';
 import { formatCurrency, formatTime } from '../../utils/helpers';
-import { supabase } from '../../supabase/supabaseClient';
 
 // Funciones helpers para Purchase/Waste (simplificadas)
 const calculateTotalCost = (cart) => cart.reduce((sum, item) => sum + (item.buyQty * item.buyCost), 0);
 const calculatePurchaseTotal = (cart) => cart.reduce((sum, item) => sum + (item.buyQty * item.buyCost), 0);
 
 
-const InventoryModule = ({ 
-    products, setProducts, 
-    wasteLogs, setWasteLogs, 
+
+const InventoryModule = ({
+    products, setProducts,
+    wasteLogs, setWasteLogs,
     suppliers, setSuppliers,
-    setPurchases, currentUser, 
-    setPriceHistory, priceHistory 
+    setPurchases, currentUser,
+    setPriceHistory, priceHistory,
+    refetchSuppliers
 }) => {
-    const [view, setView] = useState('list'); 
+    const [view, setView] = useState('list');
     const [isProductModalOpen, setIsProductModalOpen] = useState(false);
     const [editingProduct, setEditingProduct] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
     const [pendingPriceChanges, setPendingPriceChanges] = useState({});
-    
-    const [categories, setCategories] = useState([]); 
-    
+
+    const [categories, setCategories] = useState([]);
+
     // ESTADO PARA COMPRAS
     const [purchaseCart, setPurchaseCart] = useState([]);
     const [selectedSupplierId, setSelectedSupplierId] = useState('');
@@ -38,21 +40,58 @@ const InventoryModule = ({
     const [wasteProduct, setWasteProduct] = useState('');
     const [wasteQuantity, setWasteQuantity] = useState('');
 
-    
+
     // ------------------------------------------
     // FUNCIONES DE CARGA DE DATOS (RESTAURADAS Y COMPLETAS)
     // ------------------------------------------
-    
-    // Cargar productos y categorías al montar el componente (local state)
-    useEffect(() => {
-        // No se cargan desde DB, se usan los datos iniciales
+
+    // Función para obtener las categorías de la DB
+    const fetchCategories = useCallback(async () => {
+        const { data, error } = await supabase
+            .from('categories')
+            .select('id, name');
+
+        if (error) {
+            console.error('Error al cargar categorías:', error);
+            setError("No se pudieron cargar las categorías: " + error.message);
+        } else {
+            setCategories(data);
+        }
     }, []);
+
+    const fetchProducts = useCallback(async () => {
+        setIsLoading(true);
+        setError(null);
+
+        // IMPORTANTE: Usamos la sintaxis anidada 'categories (name)'
+        // Si esta consulta falla (por problemas de caché), se debe recargar el esquema de la API.
+        const { data, error } = await supabase
+            .from('products')
+            .select(`
+                *, 
+                categories (name) 
+            `);
+
+        if (error) {
+            console.error('Error al cargar productos:', error);
+            setError("No se pudieron cargar los productos: " + error.message);
+        } else {
+            setProducts(data);
+        }
+        setIsLoading(false);
+    }, [setProducts]);
+
+    // Cargar productos y categorías al montar el componente
+    useEffect(() => {
+        fetchProducts();
+        fetchCategories();
+    }, [fetchProducts, fetchCategories]);
 
 
     // ------------------------------------------
     // CRUD DE PRODUCTOS (RESTAURADO Y CORREGIDO EL SELECT)
     // ------------------------------------------
-    
+
     // CREATE / UPDATE Producto
     const handleSaveProduct = async (e) => {
         e.preventDefault();
@@ -60,33 +99,34 @@ const InventoryModule = ({
         setError(null);
 
         const formData = new FormData(e.target);
-        
+
         const productData = {
             name: formData.get('name'),
             code: formData.get('code'),
-            category_id: parseInt(formData.get('category_id')), 
+            category_id: parseInt(formData.get('category_id')),
             price: parseFloat(formData.get('price')),
             cost: parseFloat(formData.get('cost')),
             stock: parseFloat(formData.get('stock')),
             min_stock: parseFloat(formData.get('minStock')),
             unit: formData.get('unit'),
-            image: formData.get('image') || '📦' 
+            image: formData.get('image') || '📦',
+            active: true
         };
-        
-        const dataToSave = editingProduct 
-            ? { ...productData, id: editingProduct.id } 
+
+        const dataToSave = editingProduct
+            ? { ...productData, id: editingProduct.id }
             : productData;
 
         try {
             // 💡 CORRECCIÓN DE SELECT: Ser explícito en las columnas evita errores de caché
             const { data, error: supaError } = await supabase
                 .from('products')
-                .upsert([dataToSave]) 
+                .upsert([dataToSave])
                 .select(`
                     id, name, code, category_id, price, cost, stock, min_stock, unit, image,
                     categories (name)
-                `) 
-                .single(); 
+                `)
+                .single();
 
             if (supaError) {
                 throw supaError;
@@ -98,15 +138,13 @@ const InventoryModule = ({
             } else {
                 setProducts([...products, data]);
             }
-            
+
             setIsProductModalOpen(false);
             setEditingProduct(null);
-            alert(editingProduct ? "✅ Producto actualizado." : "✅ Nuevo producto guardado.");
 
         } catch (err) {
             console.error('Error al guardar/actualizar:', err);
             setError("Error al guardar el producto: " + err.message);
-            alert("Error al guardar el producto. Verifica la consola.");
         } finally {
             setIsLoading(false);
         }
@@ -114,46 +152,44 @@ const InventoryModule = ({
 
     // DELETE Producto
     const handleDeleteProduct = async (id) => {
-        if(!window.confirm("¿Estás seguro de eliminar este producto? Esta acción es irreversible.")) {
-            return;
-        }
+
         setIsLoading(true);
         setError(null);
 
         try {
             const { error: supaError } = await supabase
                 .from('products')
-                .delete()
+                .update({ active: false })
                 .eq('id', id);
 
             if (supaError) {
                 throw supaError;
             }
 
+            // Quitar solo de la vista, NO de la DB
             setProducts(products.filter(p => p.id !== id));
-            alert("🗑️ Producto eliminado.");
 
         } catch (err) {
-            console.error('Error al eliminar:', err);
-            setError("Error al eliminar el producto: " + err.message);
-            alert("Error al eliminar el producto. Verifica la consola.");
+            console.error('Error al ocultar:', err);
+            setError("Error al ocultar el producto: " + err.message);
         } finally {
             setIsLoading(false);
         }
     };
-    
+
+
     // ------------------------------------------
     // 1. FUNCIONES DE PRECIOS RÁPIDOS (COMPLETAS)
     // ------------------------------------------
-    
+
     // Almacena el cambio temporalmente en el estado 'pendingPriceChanges'
     const handlePriceChangeBuffer = (id, newPrice) => {
         setPendingPriceChanges(prev => ({
             ...prev,
-            [id]: parseFloat(newPrice) || 0, 
+            [id]: parseFloat(newPrice) || 0,
         }));
     };
-    
+
     // Guarda todos los precios modificados en la DB y registra el historial
     const saveAllPrices = async () => {
         if (Object.keys(pendingPriceChanges).length === 0) {
@@ -163,7 +199,7 @@ const InventoryModule = ({
 
         setIsLoading(true);
         setError(null);
-        
+
         const updates = [];
         const historyEntries = [];
 
@@ -190,7 +226,6 @@ const InventoryModule = ({
         if (updates.length === 0) {
             setIsLoading(false);
             setPendingPriceChanges({});
-            alert("✅ Precios ya están actualizados.");
             return;
         }
 
@@ -199,7 +234,7 @@ const InventoryModule = ({
             const { error: updateError } = await supabase
                 .from('products')
                 .upsert(updates);
-            
+
             if (updateError) throw new Error("Error al actualizar productos: " + updateError.message);
 
             // 3. Registrar los cambios en 'price_history'
@@ -217,10 +252,9 @@ const InventoryModule = ({
                 return pendingPrice !== undefined ? { ...p, price: pendingPrice } : p;
             });
             setProducts(updatedProductsState);
-            setPriceHistory(prev => [...prev, ...historyEntries]); 
+            setPriceHistory(prev => [...prev, ...historyEntries]);
 
             setPendingPriceChanges({});
-            alert(`✅ Precios de ${updates.length} productos actualizados.`);
 
         } catch (err) {
             console.error('Error al guardar precios:', err);
@@ -238,7 +272,7 @@ const InventoryModule = ({
         if (!productToAddId || !buyQty || !buyCost) return;
         const product = products.find(p => p.id === Number(productToAddId));
         if (!product) return;
-        
+
         const newItem = {
             product_id: product.id,
             name: product.name,
@@ -246,26 +280,26 @@ const InventoryModule = ({
             buyQty: parseFloat(buyQty),
             buyCost: parseFloat(buyCost),
         };
-        
+
         const exists = purchaseCart.find(i => i.product_id === product.id);
         if (exists) {
             setPurchaseCart(purchaseCart.map(i => i.product_id === product.id ? newItem : i));
         } else {
             setPurchaseCart([...purchaseCart, newItem]);
         }
-        
+
         setProductToAddId('');
         setBuyQty('');
         setBuyCost('');
     };
 
-    const finalizePurchase = () => {
+    const finalizePurchase = async () => {
         if (purchaseCart.length === 0) {
             alert("El carrito de compra está vacío.");
             return;
         }
         if (!selectedSupplierId) {
-             alert("Debe seleccionar un proveedor.");
+            alert("Debe seleccionar un proveedor.");
             return;
         }
         if (!currentUser || !currentUser.id) {
@@ -277,66 +311,106 @@ const InventoryModule = ({
         setError(null);
 
         const totalCost = calculatePurchaseTotal(purchaseCart);
-        const newPurchaseId = Date.now(); // Usar timestamp como ID único
 
-        // Preparar items de la compra
-        const itemsForInsert = purchaseCart.map(item => ({
-            purchase_id: newPurchaseId,
-            product_id: item.product_id,
-            quantity: item.buyQty,
-            cost: item.buyCost,
-            subtotal: item.buyQty * item.buyCost,
-        }));
+        // 1. Insertar la cabecera en 'purchases'
+        try {
+            const { data: purchaseData, error: purchaseError } = await supabase
+                .from('purchases')
+                .insert([{
+                    supplier_id: Number(selectedSupplierId),
+                    date: new Date().toISOString(),
+                    total_cost: totalCost,
+                    user_id: currentUser.id, // Columna user_id debe existir y estar sincronizada
+                }])
+                .select('id')
+                .single();
 
-        // Actualizar productos (stock y costo promedio)
-        const newProductsState = products.map(p => {
-            const purchasedItem = purchaseCart.find(i => i.product_id === p.id);
-            if (!purchasedItem) return p;
+            if (purchaseError) throw purchaseError;
+            const newPurchaseId = purchaseData.id;
 
-            const newStock = p.stock + purchasedItem.buyQty;
+            // 2. Preparar e insertar los items en 'purchase_items'
+            const itemsForInsert = purchaseCart.map(item => ({
+                purchase_id: newPurchaseId,
+                product_id: item.product_id,
+                quantity: item.buyQty,
+                cost: item.buyCost,
+                // Usar subtotal o calcularlo si la columna existe en purchase_items
+                subtotal: item.buyQty * item.buyCost,
+            }));
 
-            // Cálculo del Costo Promedio Ponderado (PMP)
-            const currentTotalValue = (p.stock || 0) * (p.cost || 0);
-            const purchaseTotalValue = purchasedItem.buyQty * purchasedItem.buyCost;
+            const { error: itemsError } = await supabase
+                .from('purchase_items')
+                .insert(itemsForInsert);
 
-            const newAverageCost = (currentTotalValue + purchaseTotalValue) / newStock;
+            if (itemsError) throw new Error("Error al guardar detalles de compra: " + itemsError.message);
 
-            return {
-                ...p,
-                stock: newStock,
-                cost: newAverageCost,
-            };
-        });
+            // 3.1 SUMAR deuda al proveedor
+            const { data: supplierData, error: supplierError } = await supabase
+                .from('suppliers')
+                .select('debt')
+                .eq('id', Number(selectedSupplierId))
+                .single();
 
-        // Actualizar proveedores (aumentar deuda)
-        const newSuppliersState = suppliers.map(s => {
-            if (s.id === Number(selectedSupplierId)) {
+            if (supplierError) throw new Error("Error obteniendo deuda actual del proveedor");
+
+            const newDebt = Number(supplierData.debt || 0) + totalCost;
+
+            const { error: updateDebtError } = await supabase
+                .from('suppliers')
+                .update({ debt: newDebt })
+                .eq('id', Number(selectedSupplierId));
+
+            if (updateDebtError) throw new Error("Error actualizando la deuda del proveedor");
+
+            await refetchSuppliers();
+
+
+            // 3. Preparar las actualizaciones de 'products' (stock y costo promedio)
+            const productUpdates = products.map(p => {
+                const purchasedItem = purchaseCart.find(i => i.product_id === p.id);
+                if (!purchasedItem) return null;
+
+                const newStock = p.stock + purchasedItem.buyQty;
+
+                // Cálculo del Costo Promedio Ponderado (PMP)
+                const currentTotalValue = (p.stock || 0) * (p.cost || 0); // Manejo de NULL/0
+                const purchaseTotalValue = purchasedItem.buyQty * purchasedItem.buyCost;
+
+                const newAverageCost = (currentTotalValue + purchaseTotalValue) / newStock;
+
                 return {
-                    ...s,
-                    debt: (s.debt || 0) + totalCost,
+                    id: p.id,
+                    stock: newStock,
+                    cost: newAverageCost,
                 };
-            }
-            return s;
-        });
+            }).filter(p => p !== null);
 
-        // Actualizar estado local
-        setProducts(newProductsState);
-        setSuppliers(newSuppliersState);
-        setPurchases(prev => [...prev, {
-            id: newPurchaseId,
-            supplier_id: Number(selectedSupplierId),
-            date: new Date().toISOString(),
-            total_cost: totalCost,
-            user_id: currentUser.id,
-            items: itemsForInsert
-        }]);
+            const { data: updatedProducts, error: stockError } = await supabase
+                .from('products')
+                .upsert(productUpdates)
+                .select('id, name, category_id, price, cost, stock, unit, code, min_stock, image');
 
-        setPurchaseCart([]);
-        setSelectedSupplierId('');
-        setIsLoading(false);
-        alert(`✅ Compra #${newPurchaseId} registrada. Stock y costos actualizados.`);
+            if (stockError) throw new Error("Error al actualizar stock/costo: " + stockError.message);
+
+            // 4. Actualizar estado local
+            const newProductsState = products.map(p => {
+                const updated = updatedProducts.find(up => up.id === p.id);
+                return updated || p;
+            });
+            setProducts(newProductsState);
+            setPurchases(prev => [...prev, { ...purchaseData, total_cost: totalCost, supplier_id: Number(selectedSupplierId), items: itemsForInsert }]);
+
+            setPurchaseCart([]);
+            setSelectedSupplierId('');
+
+        } catch (err) {
+            console.error('Error al finalizar compra:', err);
+            setError(`Error al registrar la compra: ${err.message}.`);
+        } finally {
+            setIsLoading(false);
+        }
     };
-    
+
     // ------------------------------------------
     // 3. FUNCIONES DE MERMAS (COMPLETAS)
     // ------------------------------------------
@@ -350,14 +424,14 @@ const InventoryModule = ({
 
         const product = products.find(p => p.id === Number(wasteProduct));
         const quantity = parseFloat(wasteQuantity);
-        
+
         if (!product) return;
 
         if (quantity > product.stock) {
             alert(`No se puede registrar merma de ${quantity} ${product.unit}. Stock actual: ${product.stock} ${product.unit}.`);
             return;
         }
-        
+
         setIsLoading(true);
         setError(null);
 
@@ -374,12 +448,12 @@ const InventoryModule = ({
                 }])
                 .select('*')
                 .single();
-            
+
             if (logError) throw logError;
-            
+
             // 2. Actualizar el stock en 'products'
             const newStock = product.stock - quantity;
-            
+
             const { data: updatedProduct, error: updateError } = await supabase
                 .from('products')
                 .update({ stock: newStock })
@@ -388,7 +462,7 @@ const InventoryModule = ({
                 .single();
 
             if (updateError) throw new Error("Error al actualizar stock por merma: " + updateError.message);
-            
+
             // 3. Actualizar estado local
             setWasteLogs(prev => [...prev, wasteLog]);
             setProducts(products.map(p => p.id === product.id ? updatedProduct : p));
@@ -396,8 +470,7 @@ const InventoryModule = ({
             setWasteProduct('');
             setWasteQuantity('');
             setWasteReason('daño');
-            
-            alert(`✅ Merma de ${quantity} ${product.unit} de ${product.name} registrada.`);
+
 
         } catch (err) {
             console.error('Error al registrar merma:', err);
@@ -408,38 +481,37 @@ const InventoryModule = ({
     };
 
 
-    const filteredProducts = products.filter(p => 
-        p.name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        p.code?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-    
-    // ------------------------------------------
-    // UI (Resto del código JSX)
-    // ------------------------------------------
-    
+    const filteredProducts = products
+        .filter(p => p.active !== false)  // mostrar solo activos
+        .filter(p =>
+            p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            p.code?.toLowerCase().includes(searchTerm.toLowerCase())
+        );
+
+
     return (
         <div className="h-full flex flex-col gap-4">
             <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-gray-200 shadow-sm">
                 <div className="flex gap-2 overflow-x-auto">
                     <button onClick={() => setView('list')} className={`px-4 py-2 rounded-md text-sm font-bold whitespace-nowrap ${view === 'list' ? 'bg-[#0F4C3A] text-white' : 'text-gray-600 hover:bg-gray-100'}`}>Lista General</button>
-                    <button onClick={() => setView('purchases')} className={`px-4 py-2 rounded-md text-sm font-bold whitespace-nowrap flex items-center gap-1 ${view === 'purchases' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Truck size={16}/> Entradas (Compras)</button>
-                    <button onClick={() => setView('prices')} className={`px-4 py-2 rounded-md text-sm font-bold whitespace-nowrap flex items-center gap-1 ${view === 'prices' ? 'bg-[#FFC857] text-black shadow' : 'text-gray-600 hover:bg-gray-100'}`}><DollarSign size={16}/> Precios Rápidos</button>
-                    <button onClick={() => setView('waste')} className={`px-4 py-2 rounded-md text-sm font-bold whitespace-nowrap flex items-center gap-1 ${view === 'waste' ? 'bg-red-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><PackageMinus size={16}/> Registro Mermas</button>
+                    <button onClick={() => setView('purchases')} className={`px-4 py-2 rounded-md text-sm font-bold whitespace-nowrap flex items-center gap-1 ${view === 'purchases' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Truck size={16} /> Entradas (Compras)</button>
+                    <button onClick={() => setView('prices')} className={`px-4 py-2 rounded-md text-sm font-bold whitespace-nowrap flex items-center gap-1 ${view === 'prices' ? 'bg-[#FFC857] text-black shadow' : 'text-gray-600 hover:bg-gray-100'}`}><DollarSign size={16} /> Precios Rápidos</button>
+                    <button onClick={() => setView('waste')} className={`px-4 py-2 rounded-md text-sm font-bold whitespace-nowrap flex items-center gap-1 ${view === 'waste' ? 'bg-red-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><PackageMinus size={16} /> Registro Mermas</button>
                 </div>
                 <Button variant="primary" icon={Plus} className="text-sm" onClick={() => { setEditingProduct(null); setIsProductModalOpen(true); }}>Nuevo Producto</Button>
             </div>
-            
+
             {error && <div className="p-3 bg-red-100 text-red-700 font-medium rounded">⚠️ Error: {error}</div>}
             {isLoading && <div className="p-3 bg-blue-100 text-blue-700 font-medium rounded">Procesando... Por favor, espere.</div>}
 
             {/* --- VISTA LISTA --- */}
-            {view === 'list' && ( 
+            {view === 'list' && (
                 <Card className="flex-1 overflow-auto">
                     {isLoading ? (<div className="text-center p-10 text-gray-500">Cargando productos...</div>) : (
                         <>
                             <div className="p-4 border-b border-gray-300 bg-gray-50 flex gap-2">
                                 <div className="relative flex-1 max-w-md">
-                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/>
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                                     <input type="text" className="w-full pl-9 pr-4 py-2 border rounded-md text-sm border-gray-300" placeholder="Buscar producto por nombre o código..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
                                 </div>
                             </div>
@@ -448,7 +520,7 @@ const InventoryModule = ({
                                     <tr>
                                         <th className="p-3 border-b border-gray-300 ">Código</th>
                                         <th className="p-3 border-b border-gray-300">Producto</th>
-                                        <th className="p-3 border-b border-gray-300">Categoría</th> 
+                                        <th className="p-3 border-b border-gray-300">Categoría</th>
                                         <th className="p-3 border-b border-gray-300">Precio</th>
                                         <th className="p-3 border-b text-center border-gray-300">Stock</th>
                                         <th className="p-3 border-b text-center border-gray-300">Estado</th>
@@ -467,8 +539,8 @@ const InventoryModule = ({
                                             <td className="p-3 text-center flex justify-center gap-2">
                                                 {(currentUser.role === 'admin' || currentUser.role === 'dueño') && (
                                                     <>
-                                                        <button onClick={() => { setEditingProduct(p); setIsProductModalOpen(true); }} className="text-blue-600 hover:bg-blue-50 p-1 rounded"><Edit size={16}/></button>
-                                                        <button onClick={() => handleDeleteProduct(p.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16}/></button>
+                                                        <button type="button" onClick={() => { setEditingProduct(p); setIsProductModalOpen(true); }} className="text-blue-600 hover:bg-blue-50 p-1 rounded"> <Edit size={16} /> </button>
+                                                        <button type="button" onClick={() => handleDeleteProduct(p.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"> <Trash2 size={16} /> </button>
                                                     </>
                                                 )}
                                             </td>
@@ -489,9 +561,9 @@ const InventoryModule = ({
                             <h3 className="font-bold text-lg">Carrito de Compra</h3>
                             <div className="flex items-center gap-4">
                                 <label className="text-sm font-medium">Proveedor:</label>
-                                <select 
-                                    value={selectedSupplierId} 
-                                    onChange={e => setSelectedSupplierId(e.target.value)} 
+                                <select
+                                    value={selectedSupplierId}
+                                    onChange={e => setSelectedSupplierId(e.target.value)}
                                     className="p-2 border rounded bg-white text-sm"
                                 >
                                     <option value="">Seleccione un proveedor</option>
@@ -501,7 +573,7 @@ const InventoryModule = ({
                                 </select>
                             </div>
                         </div>
-                        
+
                         <div className="flex-1 overflow-auto mb-4">
                             <table className="w-full text-left border-collapse">
                                 <thead className="bg-gray-50 text-gray-500 text-sm font-bold sticky top-0 z-10">
@@ -525,7 +597,7 @@ const InventoryModule = ({
                                 </tbody>
                             </table>
                         </div>
-                        
+
                         <div className="border-t pt-4 flex justify-between items-center">
                             <Button variant="ghost" onClick={() => setPurchaseCart([])}>Limpiar Carrito</Button>
                             <div className="flex flex-col items-end">
@@ -533,22 +605,22 @@ const InventoryModule = ({
                                 <p className="text-3xl font-bold text-blue-600">{formatCurrency(calculatePurchaseTotal(purchaseCart))}</p>
                             </div>
                         </div>
-                        <Button 
-                            variant="primary" 
-                            className="w-full mt-4 bg-blue-600 hover:bg-blue-700" 
-                            onClick={finalizePurchase} 
+                        <Button
+                            variant="primary"
+                            className="w-full mt-4 bg-blue-600 hover:bg-blue-700"
+                            onClick={finalizePurchase}
                             disabled={isLoading || purchaseCart.length === 0 || !selectedSupplierId}
                         >
                             {isLoading ? 'Registrando Compra...' : 'Finalizar Compra y Actualizar Stock'}
                         </Button>
                     </Card>
-                    
+
                     <Card title="Añadir Producto" className="flex flex-col gap-4">
                         <div>
                             <label className="text-sm font-bold block mb-1">Producto</label>
-                            <select 
-                                value={productToAddId} 
-                                onChange={e => setProductToAddId(e.target.value)} 
+                            <select
+                                value={productToAddId}
+                                onChange={e => setProductToAddId(e.target.value)}
                                 className="w-full p-2 border rounded bg-white"
                             >
                                 <option value="">Selecciona un producto</option>
@@ -560,28 +632,28 @@ const InventoryModule = ({
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="text-sm font-bold block mb-1">Cantidad de Compra</label>
-                                <input 
-                                    type="number" 
-                                    step="0.01" 
-                                    value={buyQty} 
-                                    onChange={e => setBuyQty(e.target.value)} 
-                                    className="w-full p-2 border rounded" 
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={buyQty}
+                                    onChange={e => setBuyQty(e.target.value)}
+                                    className="w-full p-2 border rounded"
                                 />
                             </div>
                             <div>
                                 <label className="text-sm font-bold block mb-1">Costo Unitario (sin IVA)</label>
-                                <input 
-                                    type="number" 
-                                    step="0.01" 
-                                    value={buyCost} 
-                                    onChange={e => setBuyCost(e.target.value)} 
-                                    className="w-full p-2 border rounded" 
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={buyCost}
+                                    onChange={e => setBuyCost(e.target.value)}
+                                    className="w-full p-2 border rounded"
                                 />
                             </div>
                         </div>
-                        <Button 
-                            variant="secondary" 
-                            onClick={addToPurchaseCart} 
+                        <Button
+                            variant="secondary"
+                            onClick={addToPurchaseCart}
                             disabled={!productToAddId || !buyQty || !buyCost || isLoading}
                         >
                             Añadir al Carrito
@@ -591,82 +663,82 @@ const InventoryModule = ({
             )}
 
             {/* --- VISTA: PRECIOS RÁPIDOS (CUADRÍCULA - RESTRINGIDA) --- */}
-{view === 'prices' && (
-    <Card title="Ajuste Rápido de Precios de Venta" className="flex-1 overflow-auto flex flex-col">
-        {/* Encabezado y Botón de Guardar (Solo visible para Admin/Dueño) */}
-        <div className="mb-4 pb-4 border-b border-gray-200 flex justify-between items-center sticky top-0 bg-white z-10">
-            <p className="text-sm text-gray-500">
-                {/* 🔑 Mensaje condicional basado en el rol */}
-                {(currentUser.role === 'admin' || currentUser.role === 'dueño')
-                    ? "Modifica el campo 'Nuevo Precio' para guardar múltiples cambios a la vez."
-                    : "Solo puedes visualizar los precios. La edición está restringida a Administradores."
-                }
-            </p>
-            
-            {/* 🔑 Botón de Guardar solo visible y funcional para Admin/Dueño */}
-            {(currentUser.role === 'admin' || currentUser.role === 'dueño') && (
-                <Button 
-                    icon={Save} 
-                    variant="accent" 
-                    onClick={saveAllPrices}
-                    disabled={Object.keys(pendingPriceChanges).length === 0 || isLoading}
-                >
-                    {isLoading ? 'Guardando...' : `Guardar ${Object.keys(pendingPriceChanges).length} Cambios`}
-                </Button>
-            )}
-        </div>
-        
-        {/* Contenedor de la Cuadrícula */}
-        <div className="flex-1 overflow-auto p-2">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
-                {products.map(p => {
-                    const canEdit = (currentUser.role === 'admin' || currentUser.role === 'dueño');
-                    const newPriceValue = pendingPriceChanges[p.id] !== undefined ? pendingPriceChanges[p.id] : p.price;
-                    const hasChanged = newPriceValue !== p.price;
-                    
-                    return (
-                        <div key={p.id} className={`p-4 rounded-lg border shadow-md flex flex-col gap-2 transition-all duration-150 ${hasChanged ? 'border-[#FFC857] bg-yellow-50 ring-2 ring-[#FFC857]' : 'border-gray-200 bg-white hover:shadow-lg'}`}>
-                            {/* ... (resto de la tarjeta sin cambios) ... */}
-                            <div className="flex justify-between items-start">
-                                <h4 className="font-bold text-lg leading-tight">{p.image} {p.name}</h4>
-                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${p.stock <= p.min_stock ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700'}`}>Stock: {p.stock} {p.unit}</span>
-                            </div>
-                            
-                            <hr className="my-1"/>
-                            
-                            <div className="flex justify-between text-sm text-gray-600">
-                                <span>Costo Promedio (PMP):</span>
-                                <span className="font-medium text-gray-800">{formatCurrency(p.cost)}</span>
-                            </div>
-                            
-                            <div className="flex justify-between items-center mt-1">
-                                <label className="text-sm font-bold block text-[#0F4C3A]">Precio Actual:</label>
-                                <span className="text-xl font-bold text-[#0F4C3A]">{formatCurrency(p.price)}</span>
-                            </div>
-                            
-                            {/* Campo de Edición Rápida (Solo editable por Admin/Dueño) */}
-                            <div className="mt-2">
-                                <label className="text-xs font-semibold text-gray-700 block mb-1">
-                                    {canEdit ? 'Nuevo Precio de Venta:' : 'Nuevo Precio (Vista)'}
-                                </label>
-                                <input
-                                    type="number"
-                                    step="0.01"
-                                    value={newPriceValue}
-                                    onChange={canEdit ? (e) => handlePriceChangeBuffer(p.id, e.target.value) : undefined}
-                                    disabled={!canEdit}
-                                    className={`w-full p-2 border rounded text-right font-bold text-xl ${hasChanged ? 'border-amber-500 ring-amber-500' : 'border-gray-300'} ${!canEdit ? 'bg-gray-100 cursor-not-allowed text-gray-500' : ''}`}
-                                />
-                            </div>
+            {view === 'prices' && (
+                <Card title="Ajuste Rápido de Precios de Venta" className="flex-1 overflow-auto flex flex-col">
+                    {/* Encabezado y Botón de Guardar (Solo visible para Admin/Dueño) */}
+                    <div className="mb-4 pb-4 border-b border-gray-200 flex justify-between items-center sticky top-0 bg-white z-10">
+                        <p className="text-sm text-gray-500">
+                            {/* 🔑 Mensaje condicional basado en el rol */}
+                            {(currentUser.role === 'admin' || currentUser.role === 'dueño')
+                                ? "Modifica el campo 'Nuevo Precio' para guardar múltiples cambios a la vez."
+                                : "Solo puedes visualizar los precios. La edición está restringida a Administradores."
+                            }
+                        </p>
+
+                        {/* 🔑 Botón de Guardar solo visible y funcional para Admin/Dueño */}
+                        {(currentUser.role === 'admin' || currentUser.role === 'dueño') && (
+                            <Button
+                                icon={Save}
+                                variant="accent"
+                                onClick={saveAllPrices}
+                                disabled={Object.keys(pendingPriceChanges).length === 0 || isLoading}
+                            >
+                                {isLoading ? 'Guardando...' : `Guardar ${Object.keys(pendingPriceChanges).length} Cambios`}
+                            </Button>
+                        )}
+                    </div>
+
+                    {/* Contenedor de la Cuadrícula */}
+                    <div className="flex-1 overflow-auto p-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
+                            {products.map(p => {
+                                const canEdit = (currentUser.role === 'admin' || currentUser.role === 'dueño');
+                                const newPriceValue = pendingPriceChanges[p.id] !== undefined ? pendingPriceChanges[p.id] : p.price;
+                                const hasChanged = newPriceValue !== p.price;
+
+                                return (
+                                    <div key={p.id} className={`p-4 rounded-lg border shadow-md flex flex-col gap-2 transition-all duration-150 ${hasChanged ? 'border-[#FFC857] bg-yellow-50 ring-2 ring-[#FFC857]' : 'border-gray-200 bg-white hover:shadow-lg'}`}>
+                                        {/* ... (resto de la tarjeta sin cambios) ... */}
+                                        <div className="flex justify-between items-start">
+                                            <h4 className="font-bold text-lg leading-tight">{p.image} {p.name}</h4>
+                                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${p.stock <= p.min_stock ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700'}`}>Stock: {p.stock} {p.unit}</span>
+                                        </div>
+
+                                        <hr className="my-1" />
+
+                                        <div className="flex justify-between text-sm text-gray-600">
+                                            <span>Costo Promedio (PMP):</span>
+                                            <span className="font-medium text-gray-800">{formatCurrency(p.cost)}</span>
+                                        </div>
+
+                                        <div className="flex justify-between items-center mt-1">
+                                            <label className="text-sm font-bold block text-[#0F4C3A]">Precio Actual:</label>
+                                            <span className="text-xl font-bold text-[#0F4C3A]">{formatCurrency(p.price)}</span>
+                                        </div>
+
+                                        {/* Campo de Edición Rápida (Solo editable por Admin/Dueño) */}
+                                        <div className="mt-2">
+                                            <label className="text-xs font-semibold text-gray-700 block mb-1">
+                                                {canEdit ? 'Nuevo Precio de Venta:' : 'Nuevo Precio (Vista)'}
+                                            </label>
+                                            <input
+                                                type="number"
+                                                step="0.01"
+                                                value={newPriceValue}
+                                                onChange={canEdit ? (e) => handlePriceChangeBuffer(p.id, e.target.value) : undefined}
+                                                disabled={!canEdit}
+                                                className={`w-full p-2 border rounded text-right font-bold text-xl ${hasChanged ? 'border-amber-500 ring-amber-500' : 'border-gray-300'} ${!canEdit ? 'bg-gray-100 cursor-not-allowed text-gray-500' : ''}`}
+                                            />
+                                        </div>
+                                    </div>
+                                );
+                            })}
                         </div>
-                    );
-                })}
-            </div>
-        </div>
-        
-        {products.length === 0 && <div className="text-center p-10 text-gray-500">No hay productos cargados.</div>}
-    </Card>
-)}
+                    </div>
+
+                    {products.length === 0 && <div className="text-center p-10 text-gray-500">No hay productos cargados.</div>}
+                </Card>
+            )}
 
             {/* --- VISTA: REGISTRO MERMAS --- */}
             {view === 'waste' && (
@@ -674,9 +746,9 @@ const InventoryModule = ({
                     <form onSubmit={handleRegisterWaste} className="space-y-4">
                         <div>
                             <label className="text-sm font-bold block mb-1">Producto A Descontar</label>
-                            <select 
-                                value={wasteProduct} 
-                                onChange={e => setWasteProduct(e.target.value)} 
+                            <select
+                                value={wasteProduct}
+                                onChange={e => setWasteProduct(e.target.value)}
                                 className="w-full p-2 border rounded bg-white"
                                 required
                             >
@@ -689,21 +761,21 @@ const InventoryModule = ({
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="text-sm font-bold block mb-1">Cantidad</label>
-                                <input 
-                                    type="number" 
-                                    step="0.01" 
-                                    value={wasteQuantity} 
-                                    onChange={e => setWasteQuantity(e.target.value)} 
-                                    className="w-full p-2 border rounded" 
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={wasteQuantity}
+                                    onChange={e => setWasteQuantity(e.target.value)}
+                                    className="w-full p-2 border rounded"
                                     placeholder="0.00"
                                     required
                                 />
                             </div>
                             <div>
                                 <label className="text-sm font-bold block mb-1">Razón de la Merma</label>
-                                <select 
-                                    value={wasteReason} 
-                                    onChange={e => setWasteReason(e.target.value)} 
+                                <select
+                                    value={wasteReason}
+                                    onChange={e => setWasteReason(e.target.value)}
                                     className="w-full p-2 border rounded bg-white"
                                     required
                                 >
@@ -714,17 +786,17 @@ const InventoryModule = ({
                                 </select>
                             </div>
                         </div>
-                        <Button 
-                            type="submit" 
-                            variant="danger" 
-                            className="w-full" 
+                        <Button
+                            type="submit"
+                            variant="danger"
+                            className="w-full"
                             icon={PackageMinus}
                             disabled={isLoading}
                         >
                             {isLoading ? 'Registrando...' : 'Registrar Merma y Descontar Stock'}
                         </Button>
                     </form>
-                    
+
                     <div className="mt-6 border-t pt-4">
                         <h3 className="font-bold text-gray-700 mb-2">Historial Reciente de Mermas</h3>
                         <ul className="text-sm space-y-2 max-h-48 overflow-y-auto">
@@ -747,37 +819,37 @@ const InventoryModule = ({
 
             {/* --- MODAL --- */}
             <Modal isOpen={isProductModalOpen} onClose={() => setIsProductModalOpen(false)} title={editingProduct ? "Editar Producto" : "Nuevo Producto"}>
-                <form onSubmit={handleSaveProduct} className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4"><div><label className="text-sm font-bold block mb-1">Nombre</label><input name="name" required defaultValue={editingProduct?.name} className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A]" /></div><div><label className="text-sm font-bold block mb-1">Código / EAN</label><input name="code" required defaultValue={editingProduct?.code} className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A]" placeholder="EJ: TOM01" /></div></div>
-                    
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="text-sm font-bold block mb-1">Categoría</label>
-                            <select 
-                                name="category_id" 
-                                defaultValue={editingProduct?.category_id} 
-                                className="w-full p-2 border rounded bg-white"
-                            >
-                                <option value="">Selecciona una categoría</option>
-                                {categories.map(cat => (
-                                    <option key={cat.id} value={cat.id}>
-                                        {cat.name}
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                        
-                        <div><label className="text-sm font-bold block mb-1">Unidad</label><select name="unit" defaultValue={editingProduct?.unit || 'kg'} className="w-full p-2 border rounded bg-white"><option value="kg">Kilo (kg)</option><option value="pza">Pieza (pza)</option><option value="caja">Caja</option><option value="lt">Litro</option></select></div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4 bg-gray-50 p-3 rounded border"><div><label className="text-sm font-bold block mb-1 text-gray-500">Costo Compra</label><input name="cost" type="number" step="0.01" required defaultValue={editingProduct?.cost} className="w-full p-2 border rounded" /></div><div><label className="text-sm font-bold block mb-1 text-[#0F4C3A]">Precio Venta</label><input name="price" type="number" step="0.01" required defaultValue={editingProduct?.price} className="w-full p-2 border rounded font-bold text-[#0F4C3A]" /></div></div>
-                    <div className="grid grid-cols-2 gap-4"><div><label className="text-sm font-bold block mb-1">Stock Actual</label><input name="stock" type="number" step="0.01" required defaultValue={editingProduct?.stock} className="w-full p-2 border rounded" /></div><div><label className="text-sm font-bold block mb-1 text-red-500">Min. Stock (Alerta)</label><input name="minStock" type="number" step="0.01" required defaultValue={editingProduct?.min_stock} className="w-full p-2 border rounded" /></div></div>
-                    <div><label className="text-sm font-bold block mb-1">Emoji / Imagen</label><input name="image" defaultValue={editingProduct?.image} className="w-full p-2 border rounded" placeholder="🍅" /></div>
-                    <div className="flex justify-end gap-2 pt-4 border-t"><Button variant="ghost" onClick={() => setIsProductModalOpen(false)} disabled={isLoading}>Cancelar</Button><Button variant="primary" type="submit" disabled={isLoading}>{isLoading ? 'Guardando...' : 'Guardar Producto'}</Button></div>
-                </form>
-            </Modal>
-        </div>
-    );
+                <form onSubmit={handleSaveProduct} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4"><div><label className="text-sm font-bold block mb-1">Nombre</label><input name="name" required defaultValue={editingProduct?.name} className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A]" /></div><div><label className="text-sm font-bold block mb-1">Código / EAN</label><input name="code" required defaultValue={editingProduct?.code} className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A]" placeholder="EJ: TOM01" /></div></div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-sm font-bold block mb-1">Categoría</label>
+                            <select
+                                name="category_id"
+                                defaultValue={editingProduct?.category_id}
+                                className="w-full p-2 border rounded bg-white"
+                            >
+                                <option value="">Selecciona una categoría</option>
+                                {categories.map(cat => (
+                                    <option key={cat.id} value={cat.id}>
+                                        {cat.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div><label className="text-sm font-bold block mb-1">Unidad</label><select name="unit" defaultValue={editingProduct?.unit || 'kg'} className="w-full p-2 border rounded bg-white"><option value="kg">Kilo (kg)</option><option value="pza">Pieza (pza)</option><option value="caja">Caja</option><option value="lt">Litro</option></select></div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 bg-gray-50 p-3 rounded border"><div><label className="text-sm font-bold block mb-1 text-gray-500">Costo Compra</label><input name="cost" type="number" step="0.01" required defaultValue={editingProduct?.cost} className="w-full p-2 border rounded" /></div><div><label className="text-sm font-bold block mb-1 text-[#0F4C3A]">Precio Venta</label><input name="price" type="number" step="0.01" required defaultValue={editingProduct?.price} className="w-full p-2 border rounded font-bold text-[#0F4C3A]" /></div></div>
+                    <div className="grid grid-cols-2 gap-4"><div><label className="text-sm font-bold block mb-1">Stock Actual</label><input name="stock" type="number" step="0.01" required defaultValue={editingProduct?.stock} className="w-full p-2 border rounded" /></div><div><label className="text-sm font-bold block mb-1 text-red-500">Min. Stock (Alerta)</label><input name="minStock" type="number" step="0.01" required defaultValue={editingProduct?.min_stock} className="w-full p-2 border rounded" /></div></div>
+                    <div><label className="text-sm font-bold block mb-1">Emoji / Imagen</label><input name="image" defaultValue={editingProduct?.image} className="w-full p-2 border rounded" placeholder="🍅" /></div>
+                    <div className="flex justify-end gap-2 pt-4 border-t"><Button variant="ghost" onClick={() => setIsProductModalOpen(false)} disabled={isLoading}>Cancelar</Button><Button variant="primary" type="submit" disabled={isLoading}>{isLoading ? 'Guardando...' : 'Guardar Producto'}</Button></div>
+                </form>
+            </Modal>
+        </div>
+    );
 };
 
 export default InventoryModule;

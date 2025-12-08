@@ -37,7 +37,12 @@ const LoginScreen = ({ onLogin, users }) => {
         .eq("password", passwordVal)
         .eq("active", true)
         .single();
-    }
+    } if (method === 'pin') {
+        query = supabase.from("users").select("*").eq("pin", inputVal.trim()).eq("active", true).single();
+      } else {
+        query = supabase.from("users").select("*").eq("name", inputVal.trim()).eq("password", passwordVal).eq("active", true).single();
+      }
+    
 
         console.log("Ejecutando query...");
     const { data, error: supaError } = await query;
@@ -50,6 +55,7 @@ const LoginScreen = ({ onLogin, users }) => {
     }
 
     // Login exitoso → regresamos el usuario completo (row)
+    localStorage.setItem('fruteria_user', JSON.stringify(data));
     onLogin(data);
 
   } catch (err) {

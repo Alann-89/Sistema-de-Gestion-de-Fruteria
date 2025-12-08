@@ -40,6 +40,28 @@ const App = () => {
   const [cashFunds, setCashFunds] = useState([]);
   const [priceHistory, setPriceHistory] = useState([]);
 
+  useEffect(() => {
+    // 1. Buscamos si hay un usuario guardado en el navegador
+    const usuarioGuardado = localStorage.getItem('fruteria_user');
+    
+    // 2. Si existe, lo convertimos de texto a objeto y lo metemos al estado
+    if (usuarioGuardado) {
+      try {
+        const userParsed = JSON.parse(usuarioGuardado);
+        setCurrentUser(userParsed);
+      } catch (error) {
+        console.error("Error recuperando sesión", error);
+        localStorage.removeItem('fruteria_user'); // Si falla, limpiamos
+      }
+    }
+  }, []);
+
+  const handleLogout = () => {
+    // 1. Borramos el usuario de la memoria del navegador
+    localStorage.removeItem('fruteria_user');
+    // 2. Borramos el estado para volver al Login
+    setCurrentUser(null);
+  };
   // ======================================
   // Funciones para cargar datos de Supabase
   // ======================================
@@ -203,36 +225,23 @@ const App = () => {
   // ==============================
 // Restaurar sesión de Supabase
 // ==============================
+// ✅✅✅ PEGA ESTE BLOQUE EN SU LUGAR ✅✅✅
 useEffect(() => {
-  const restoreSession = async () => {
-    const { data } = await supabase.auth.getSession();
-
-    if (data?.session?.user) {
-      // Opcional: Buscar el usuario completo en tu tabla users
-      const { data: userRow } = await supabase
-        .from("users")
-        .select("*")
-        .eq("id", data.session.user.id)
-        .single();
-
-      setCurrentUser(userRow || null);
+  // 1. Intentamos leer del navegador
+  const usuarioGuardado = localStorage.getItem('fruteria_user');
+  
+  if (usuarioGuardado) {
+    console.log("Sesión encontrada en almacenamiento local:", usuarioGuardado); // Para depurar
+    try {
+      const userParsed = JSON.parse(usuarioGuardado);
+      setCurrentUser(userParsed);
+    } catch (err) {
+      console.error("Error al leer datos guardados, borrando...", err);
+      localStorage.removeItem('fruteria_user');
     }
-  };
-
-  restoreSession();
-
-  // Escuchar logins / logouts
-  const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-    if (session?.user) {
-      setCurrentUser(session.user);
-    } else {
-      setCurrentUser(null);
-    }
-  });
-
-  return () => {
-    listener.subscription.unsubscribe();
-  };
+  } else {
+    console.log("No hay sesión guardada.");
+  }
 }, []);
 
 
@@ -261,7 +270,7 @@ useEffect(() => {
         </nav>
         <div className="p-4 border-t border-[#0a3528]">
           <button
-            onClick={() => setCurrentUser(null)}
+            onClick={handleLogout}
             className="w-full flex items-center justify-center md:justify-start gap-3 px-4 py-2 text-red-300 hover:bg-[#B71C1C] hover:text-white rounded-lg transition-colors"
           >
             <LogOut size={20} />

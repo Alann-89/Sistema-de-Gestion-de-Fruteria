@@ -212,6 +212,7 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
 
     useEffect(() => {
         fetchLastFolio();
+        refetchProducts();
     }, [fetchLastFolio]); 
 
     // Función para GUARDAR la venta en Supabase y DESCONTAR stock
@@ -351,9 +352,9 @@ const POSModule = ({ products, users, currentUser, sales, setSales, heldSales, s
     
     // Función para CANCELAR la venta y DEVOLVER stock
     const handleCancelSale = async (saleId) => {
-        if (!window.confirm("¿Está seguro de CANCELAR esta venta? Esta acción no se puede deshacer y devolverá el stock al inventario.")) {
-            return;
-        }
+        // if (!window.confirm("¿Está seguro de CANCELAR esta venta? Esta acción no se puede deshacer y devolverá el stock al inventario.")) {
+        //     return;
+        // }
         setIsLoading(true);
         setError(null);
         

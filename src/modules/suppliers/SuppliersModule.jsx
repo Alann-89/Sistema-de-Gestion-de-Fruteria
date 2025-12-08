@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, FileText, DollarSign, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
+import { Plus, FileText, DollarSign } from 'lucide-react';
 import { Button, Card, Modal } from '../../components/ui/SharedComponents';
-import { formatCurrency, formatTime, formatDateShort } from '../../utils/helpers';
+import { formatCurrency } from '../../utils/helpers';
 import { supabase } from '../../supabase/supabaseClient';
 
 const SuppliersModule = () => {
   const [suppliers, setSuppliers] = useState([]);
-  const [purchases, setPurchases] = useState([]);
   const [payments, setPayments] = useState([]);
 
   const [selectedSupplier, setSelectedSupplier] = useState(null);
@@ -15,12 +14,13 @@ const SuppliersModule = () => {
   const [payMethod, setPayMethod] = useState('Efectivo');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const [filterStartDate, setFilterStartDate] = useState('');
-  const [filterEndDate, setFilterEndDate] = useState('');
-
-  // Cargar proveedores desde Supabase
+  // Cargar proveedores activos
   const fetchSuppliers = async () => {
-    const { data, error } = await supabase.from('suppliers').select('*');
+    const { data, error } = await supabase
+      .from('suppliers')
+      .select('*')
+      .eq('active', true); // SOLO ACTIVOS
+
     if (error) {
       console.error('Error cargando proveedores:', error);
       return;
@@ -28,7 +28,7 @@ const SuppliersModule = () => {
     setSuppliers(data);
   };
 
-  // Cargar pagos desde Supabase
+  // Cargar pagos
   const fetchPayments = async () => {
     const { data, error } = await supabase.from('payments').select('*');
     if (error) {
@@ -43,7 +43,7 @@ const SuppliersModule = () => {
     fetchPayments();
   }, []);
 
-  // Función para actualizar deuda de un proveedor
+  // Actualizar deuda
   const updateSupplierDebt = async (id, newDebt) => {
     const { error } = await supabase.from('suppliers').update({ debt: newDebt }).eq('id', id);
     if (error) console.error("Error actualizando deuda:", error);
@@ -57,7 +57,6 @@ const SuppliersModule = () => {
 
     const newDebt = Math.max(0, payingSupplier.debt - amount);
 
-    // Guardar pago en BD
     const { error } = await supabase.from('payments').insert({
       supplier_id: payingSupplier.id,
       amount,
@@ -71,10 +70,8 @@ const SuppliersModule = () => {
       return;
     }
 
-    // Actualizar deuda en BD
     await updateSupplierDebt(payingSupplier.id, newDebt);
 
-    // Actualizar estado local
     setSuppliers(suppliers.map(s => s.id === payingSupplier.id ? { ...s, debt: newDebt } : s));
     setPayments([...payments, { id: Date.now(), supplier_id: payingSupplier.id, amount, date: new Date(), method: payMethod }]);
 
@@ -83,17 +80,17 @@ const SuppliersModule = () => {
     alert('Abono registrado correctamente.');
   };
 
-  // Agregar nuevo proveedor
+  // Guardar proveedor nuevo
   const handleSaveSupplier = async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
+
     const newSupplier = {
       name: formData.get('name'),
       phone: formData.get('phone'),
       visit_day: formData.get('visitDay'),
-      //address: formData.get('address'),
-      //email: formData.get('email'),
-      debt: 0
+      debt: 0,
+      active: true // NUEVO CAMPO
     };
 
     const { data, error } = await supabase.from('suppliers').insert(newSupplier).select();
@@ -105,6 +102,22 @@ const SuppliersModule = () => {
 
     setSuppliers([...suppliers, data[0]]);
     setIsModalOpen(false);
+  };
+
+  // DESACTIVAR PROVEEDOR
+  const deactivateSupplier = async (id) => {
+    const { error } = await supabase
+      .from('suppliers')
+      .update({ active: false })
+      .eq('id', id);
+
+    if (error) {
+      console.error("Error desactivando proveedor:", error);
+      return alert("Error desactivando proveedor.");
+    }
+
+    // Quitar de la lista sin alterar UI existente
+    setSuppliers(suppliers.filter(s => s.id !== id));
   };
 
   return (
@@ -123,7 +136,7 @@ const SuppliersModule = () => {
                 <div className="flex items-center gap-2 text-sm text-gray-500 mt-1">
                   <span>📞 {prov.phone}</span>
                   <span className="text-gray-300">|</span>
-                  <span>Visita: {prov.visitDay}</span>
+                  <span>Visita: {prov.visit_day}</span>
                 </div>
               </div>
               <div className="text-right">
@@ -133,9 +146,32 @@ const SuppliersModule = () => {
                 </div>
               </div>
             </div>
+
             <div className="mt-6 pt-4 border-t border-gray-100 flex gap-2">
               <Button variant="outline" className="flex-1 text-sm py-1" icon={FileText} onClick={() => setSelectedSupplier(prov)}>Ver Historial</Button>
-              {prov.debt > 0 && <Button variant="secondary" className="flex-1 text-sm py-1" icon={DollarSign} onClick={() => setPayingSupplier(prov)}>Registrar Abono</Button>}
+
+              {prov.debt > 0 && (
+                <Button
+                  variant="secondary"
+                  className="flex-1 text-sm py-1"
+                  icon={DollarSign}
+                  onClick={() => setPayingSupplier(prov)}
+                >
+                  Registrar Abono
+                </Button>
+              )}
+
+              <Button
+                variant="ghost"
+                className="flex-1 text-sm py-1 text-red-700 border-red-300 hover:bg-red-50"
+                onClick={() => {
+                  if (confirm("¿Desactivar este proveedor?")) {
+                    deactivateSupplier(prov.id);
+                  }
+                }}
+              >
+                Desactivar
+              </Button>
             </div>
           </Card>
         ))}
@@ -148,6 +184,7 @@ const SuppliersModule = () => {
             <div className="text-xs text-gray-500">Deuda Actual</div>
             <div className="text-2xl font-bold text-red-600">{formatCurrency(payingSupplier?.debt || 0)}</div>
           </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-bold block mb-1">Monto a Pagar</label>
@@ -162,6 +199,7 @@ const SuppliersModule = () => {
                 required
               />
             </div>
+
             <div>
               <label className="text-sm font-bold block mb-1">Método</label>
               <select className="w-full p-3 border rounded" value={payMethod} onChange={e => setPayMethod(e.target.value)}>
@@ -171,6 +209,7 @@ const SuppliersModule = () => {
               </select>
             </div>
           </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="ghost" onClick={() => setPayingSupplier(null)}>Cancelar</Button>
             <Button variant="primary" type="submit">Confirmar Pago</Button>
@@ -178,7 +217,7 @@ const SuppliersModule = () => {
         </form>
       </Modal>
 
-      {/* Modal de nuevo proveedor */}
+      {/* Modal nuevo proveedor */}
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Registrar Nuevo Proveedor">
         <form onSubmit={handleSaveSupplier} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -191,15 +230,18 @@ const SuppliersModule = () => {
               <input name="phone" required className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A] outline-none" placeholder="Ej. 449-123-4567" />
             </div>
           </div>
+
           <div>
             <label className="block text-sm font-medium mb-1">Dirección</label>
             <input name="address" className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A] outline-none" placeholder="Calle, Número, Colonia" />
           </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Correo Electrónico</label>
               <input name="email" type="email" className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A] outline-none" placeholder="contacto@proveedor.com" />
             </div>
+
             <div>
               <label className="block text-sm font-medium mb-1">Día de Visita</label>
               <select name="visitDay" className="w-full p-2 border rounded bg-white">
@@ -213,6 +255,7 @@ const SuppliersModule = () => {
               </select>
             </div>
           </div>
+
           <div className="pt-4 flex justify-end gap-3">
             <Button type="button" variant="ghost" onClick={() => setIsModalOpen(false)}>Cancelar</Button>
             <Button variant="primary" type="submit">Guardar Proveedor</Button>

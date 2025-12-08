@@ -262,7 +262,7 @@ const ReportsModule = ({ sales, wasteLogs, cashFunds, setCashFunds, payments }) 
     
     const productStats = {};
     filteredData.sales.forEach(sale => { 
-        sale.items.forEach(item => { 
+        sales.forEach(item => { 
             if (!productStats[item.name]) productStats[item.name] = 0; 
             productStats[item.name] += item.qty; 
         }); 

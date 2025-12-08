@@ -133,7 +133,7 @@ const UserManagement = ({ users, setUsers }) => {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('¿Eliminar este usuario? Esta acción no se puede deshacer.')) return;
+    //if (!confirm('¿Eliminar este usuario? Esta acción no se puede deshacer.')) return;
     try {
       const { error } = await supabase.from('users').delete().eq('id', id);
       if (error) throw error;

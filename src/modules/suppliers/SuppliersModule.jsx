@@ -9,17 +9,21 @@ const SuppliersModule = () => {
   const [payments, setPayments] = useState([]);
 
   const [selectedSupplier, setSelectedSupplier] = useState(null);
+  const [supplierHistory, setSupplierHistory] = useState([]);
+
   const [payingSupplier, setPayingSupplier] = useState(null);
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState('Efectivo');
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Cargar proveedores activos
+  // ----------------------------
+  // CARGAR PROVEEDORES
+  // ----------------------------
   const fetchSuppliers = async () => {
     const { data, error } = await supabase
       .from('suppliers')
       .select('*')
-      .eq('active', true); // SOLO ACTIVOS
+      .eq('active', true);
 
     if (error) {
       console.error('Error cargando proveedores:', error);
@@ -28,7 +32,9 @@ const SuppliersModule = () => {
     setSuppliers(data);
   };
 
-  // Cargar pagos
+  // ----------------------------
+  // CARGAR PAGOS (GENERAL)
+  // ----------------------------
   const fetchPayments = async () => {
     const { data, error } = await supabase.from('payments').select('*');
     if (error) {
@@ -38,18 +44,47 @@ const SuppliersModule = () => {
     setPayments(data);
   };
 
+  // ----------------------------
+  // CARGAR HISTORIAL DEL PROVEEDOR
+  // ----------------------------
+  const fetchSupplierHistory = async (supplierId) => {
+    const { data, error } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('supplier_id', supplierId)
+      .order('date', { ascending: false });
+
+    if (error) {
+      console.error("Error cargando historial:", error);
+      return;
+    }
+
+    setSupplierHistory(data);
+  };
+
   useEffect(() => {
     fetchSuppliers();
     fetchPayments();
   }, []);
 
-  // Actualizar deuda
+  useEffect(() => {
+    if (selectedSupplier) {
+      fetchSupplierHistory(selectedSupplier.id);
+    }
+  }, [selectedSupplier]);
+
+
+  // ----------------------------
+  // ACTUALIZAR DEUDA
+  // ----------------------------
   const updateSupplierDebt = async (id, newDebt) => {
     const { error } = await supabase.from('suppliers').update({ debt: newDebt }).eq('id', id);
     if (error) console.error("Error actualizando deuda:", error);
   };
 
-  // Registrar pago
+  // ----------------------------
+  // REGISTRAR PAGO
+  // ----------------------------
   const handleRegisterPayment = async (e) => {
     e.preventDefault();
     const amount = parseFloat(payAmount);
@@ -57,7 +92,7 @@ const SuppliersModule = () => {
 
     const newDebt = Math.max(0, payingSupplier.debt - amount);
 
-    const { error } = await supabase.from('payments').insert({
+    const { data, error } = await supabase.from('payments').insert({
       supplier_id: payingSupplier.id,
       amount,
       date: new Date(),
@@ -72,7 +107,12 @@ const SuppliersModule = () => {
 
     await updateSupplierDebt(payingSupplier.id, newDebt);
 
-    setSuppliers(suppliers.map(s => s.id === payingSupplier.id ? { ...s, debt: newDebt } : s));
+    setSuppliers(
+      suppliers.map(s =>
+        s.id === payingSupplier.id ? { ...s, debt: newDebt } : s
+      )
+    );
+
     setPayments([...payments, { id: Date.now(), supplier_id: payingSupplier.id, amount, date: new Date(), method: payMethod }]);
 
     setPayingSupplier(null);
@@ -80,7 +120,9 @@ const SuppliersModule = () => {
     alert('Abono registrado correctamente.');
   };
 
-  // Guardar proveedor nuevo
+  // ----------------------------
+  // GUARDAR NUEVO PROVEEDOR
+  // ----------------------------
   const handleSaveSupplier = async (e) => {
     e.preventDefault();
     const formData = new FormData(e.target);
@@ -90,7 +132,9 @@ const SuppliersModule = () => {
       phone: formData.get('phone'),
       visit_day: formData.get('visitDay'),
       debt: 0,
-      active: true // NUEVO CAMPO
+      active: true,
+      address: formData.get('address'),
+      email: formData.get('email')
     };
 
     const { data, error } = await supabase.from('suppliers').insert(newSupplier).select();
@@ -104,7 +148,9 @@ const SuppliersModule = () => {
     setIsModalOpen(false);
   };
 
+  // ----------------------------
   // DESACTIVAR PROVEEDOR
+  // ----------------------------
   const deactivateSupplier = async (id) => {
     const { error } = await supabase
       .from('suppliers')
@@ -116,10 +162,12 @@ const SuppliersModule = () => {
       return alert("Error desactivando proveedor.");
     }
 
-    // Quitar de la lista sin alterar UI existente
     setSuppliers(suppliers.filter(s => s.id !== id));
   };
 
+  // ----------------------------
+  // RENDER
+  // ----------------------------
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -148,7 +196,14 @@ const SuppliersModule = () => {
             </div>
 
             <div className="mt-6 pt-4 border-t border-gray-100 flex gap-2">
-              <Button variant="outline" className="flex-1 text-sm py-1" icon={FileText} onClick={() => setSelectedSupplier(prov)}>Ver Historial</Button>
+              <Button
+                variant="outline"
+                className="flex-1 text-sm py-1"
+                icon={FileText}
+                onClick={() => setSelectedSupplier(prov)}
+              >
+                Ver Historial
+              </Button>
 
               {prov.debt > 0 && (
                 <Button
@@ -177,7 +232,9 @@ const SuppliersModule = () => {
         ))}
       </div>
 
-      {/* Modal de pago */}
+      {/* ----------------------------
+          MODAL DE PAGO
+      ---------------------------- */}
       <Modal isOpen={!!payingSupplier} onClose={() => setPayingSupplier(null)} title="Registrar Pago a Proveedor">
         <form onSubmit={handleRegisterPayment} className="space-y-4">
           <div className="p-4 bg-gray-50 rounded border text-center">
@@ -217,29 +274,63 @@ const SuppliersModule = () => {
         </form>
       </Modal>
 
-      {/* Modal nuevo proveedor */}
+      {/* ----------------------------
+          MODAL HISTORIAL
+      ---------------------------- */}
+      <Modal
+        isOpen={!!selectedSupplier}
+        onClose={() => {
+          setSelectedSupplier(null);
+          setSupplierHistory([]);
+        }}
+        title={`Historial de Pagos – ${selectedSupplier?.name || ""}`}
+      >
+        <div className="space-y-4">
+          {supplierHistory.length === 0 ? (
+            <p className="text-center text-gray-500 py-4">
+              Este proveedor no tiene pagos registrados.
+            </p>
+          ) : (
+            supplierHistory.map(pay => (
+              <Card key={pay.id} className="p-4 flex justify-between items-center">
+                <div>
+                  <div className="font-bold">{formatCurrency(pay.amount)}</div>
+                  <div className="text-xs text-gray-500">
+                    {new Date(pay.date).toLocaleString()}
+                  </div>
+                </div>
+                <div className="text-sm text-gray-600">{pay.method}</div>
+              </Card>
+            ))
+          )}
+        </div>
+      </Modal>
+
+      {/* ----------------------------
+          MODAL NUEVO PROVEEDOR
+      ---------------------------- */}
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Registrar Nuevo Proveedor">
         <form onSubmit={handleSaveSupplier} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Nombre o Empresa</label>
-              <input name="name" required className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A] outline-none" placeholder="Ej. Frutas del Campo" />
+              <input name="name" required className="w-full p-2 border rounded" placeholder="Ej. Frutas del Campo" />
             </div>
             <div>
               <label className="block text-sm font-medium mb-1">Teléfono</label>
-              <input name="phone" required className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A] outline-none" placeholder="Ej. 449-123-4567" />
+              <input name="phone" required className="w-full p-2 border rounded" placeholder="Ej. 449-123-4567" />
             </div>
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-1">Dirección</label>
-            <input name="address" className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A] outline-none" placeholder="Calle, Número, Colonia" />
+            <input name="address" className="w-full p-2 border rounded" placeholder="Calle, Número, Colonia" />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Correo Electrónico</label>
-              <input name="email" type="email" className="w-full p-2 border rounded focus:ring-2 focus:ring-[#0F4C3A] outline-none" placeholder="contacto@proveedor.com" />
+              <input name="email" type="email" className="w-full p-2 border rounded" placeholder="contacto@proveedor.com" />
             </div>
 
             <div>
